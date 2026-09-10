@@ -41,5 +41,5 @@ jobs:
       - name: Install Firebase CLI
         run: npm install -g firebase-tools
 
-      - name: Deploy Firebase
-        run: firebase deploy --project daughtridge-investment-group
+      - name: Deploy Hosting and Firestore
+        run: firebase deploy --project daughtridge-investment-group --only hosting,firestore
