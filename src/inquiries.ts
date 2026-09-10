@@ -10,6 +10,7 @@ import {
   query,
   serverTimestamp,
   startAfter,
+  updateDoc,
   where,
   type DocumentData,
   type QueryConstraint,
@@ -122,7 +123,6 @@ export async function submitInquiry({
     firstName: data.firstName.trim(),
     lastName: data.lastName.trim(),
 
-    // Used by the Admin Dashboard search.
     firstNameLower: data.firstName.trim().toLowerCase(),
     lastNameLower: data.lastName.trim().toLowerCase(),
 
@@ -185,18 +185,19 @@ function dateConstraints(
 
   if (dateFrom) {
     parts.push(
-      where("submittedAt", ">=", new Date(`${dateFrom}T00:00:00`)),
+      where(
+        "submittedAt",
+        ">=",
+        new Date(`${dateFrom}T00:00:00`),
+      ),
     );
   }
 
   if (dateTo) {
-    parts.push(
-      where("submittedAt", "<", new Date(`${dateTo}T00:00:00`).getTime()
-        ? new Date(
-            new Date(`${dateTo}T00:00:00`).getTime() + 24 * 60 * 60 * 1000,
-          )
-        : new Date(`${dateTo}T23:59:59.999`)),
-    );
+    const end = new Date(`${dateTo}T00:00:00`);
+    end.setDate(end.getDate() + 1);
+
+    parts.push(where("submittedAt", "<", end));
   }
 
   return parts;
@@ -209,6 +210,7 @@ export async function listInquiriesPage(
   dateTo?: string,
 ) {
   const col = collection(db, "inquiries");
+
   const constraints: QueryConstraint[] = [];
 
   if (status !== "all") {
@@ -282,9 +284,24 @@ export async function searchInquiries(
   const upperEnd = `${upper}\uf8ff`;
 
   const snaps = await Promise.all([
-    prefixQuery("referenceNumber", upper, upperEnd, status),
-    prefixQuery("lastNameLower", lower, lowerEnd, status),
-    prefixQuery("firstNameLower", lower, lowerEnd, status),
+    prefixQuery(
+      "referenceNumber",
+      upper,
+      upperEnd,
+      status,
+    ),
+    prefixQuery(
+      "lastNameLower",
+      lower,
+      lowerEnd,
+      status,
+    ),
+    prefixQuery(
+      "firstNameLower",
+      lower,
+      lowerEnd,
+      status,
+    ),
   ]);
 
   const byId = new Map<string, SubmissionRow>();
@@ -303,8 +320,11 @@ export async function getInquiryStats(): Promise<InquiryStats> {
 
   const [totalSnap, ...statusSnaps] = await Promise.all([
     getCountFromServer(query(col)),
+
     ...STATUSES.map((status) =>
-      getCountFromServer(query(col, where("status", "==", status))),
+      getCountFromServer(
+        query(col, where("status", "==", status)),
+      ),
     ),
   ]);
 
@@ -338,7 +358,11 @@ export async function exportAllInquiries(): Promise<SubmissionRow[]> {
           startAfter(cursor),
           limit(500),
         )
-      : query(col, orderBy("submittedAt", "desc"), limit(500));
+      : query(
+          col,
+          orderBy("submittedAt", "desc"),
+          limit(500),
+        );
 
     const snap = await getDocs(q);
 
@@ -356,9 +380,14 @@ export async function updateInquiryStatus(
   id: string,
   status: SubmissionStatus,
 ) {
-  await updateDoc(doc(db, "inquiries", id), { status });
+  await updateDoc(
+    doc(db, "inquiries", id),
+    { status },
+  );
 }
 
 export async function deleteInquiry(id: string) {
-  await deleteDoc(doc(db, "inquiries", id));
+  await deleteDoc(
+    doc(db, "inquiries", id),
+  );
 }
