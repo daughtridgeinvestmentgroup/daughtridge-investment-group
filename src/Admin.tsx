@@ -1,4 +1,4 @@
-import { useEffect, useState, type FormEvent } from "react";
+import { useEffect, useMemo, useState, type FormEvent } from "react";
 import {
   onAuthStateChanged,
   signInWithEmailAndPassword,
@@ -13,7 +13,6 @@ import {
   PAGE_SIZE,
   STATUSES,
   deleteInquiry,
-  exportAllInquiries,
   getInquiryStats,
   listInquiriesPage,
   searchInquiries,
@@ -24,44 +23,46 @@ import {
 } from "./inquiries";
 import { HeaderLogo } from "./logo";
 
-const EMPTY_STATS: InquiryStats = {
-  total: 0,
-  New: 0,
-  Qualified: 0,
-  "Not Qualified": 0,
-  "In Progress": 0,
-  Completed: 0,
-};
-
 function csvCell(value: string) {
   if (/[",\n\r]/.test(value)) {
     return `"${value.replace(/"/g, '""')}"`;
   }
-
   return value;
 }
 
 function formatDate(value: string) {
-  return new Date(value).toLocaleString();
+  if (!value) return "—";
+
+  const date = new Date(value);
+
+  if (Number.isNaN(date.getTime())) {
+    return value;
+  }
+
+  return date.toLocaleString();
 }
 
 export function Admin() {
   const [user, setUser] = useState<User | null>(null);
   const [ready, setReady] = useState(false);
+
   const [authError, setAuthError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
   const [rows, setRows] = useState<SubmissionRow[]>([]);
-  const [stats, setStats] = useState<InquiryStats>(EMPTY_STATS);
 
-  const [statusFilter, setStatusFilter] =
-    useState<"all" | SubmissionStatus>("all");
+  const [statusFilter, setStatusFilter] = useState<
+    "all" | SubmissionStatus
+  >("all");
 
   const [searchInput, setSearchInput] = useState("");
   const [searchActive, setSearchActive] = useState(false);
 
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
+
+  const [appliedDateFrom, setAppliedDateFrom] = useState("");
+  const [appliedDateTo, setAppliedDateTo] = useState("");
 
   const [page, setPage] = useState(1);
   const [total, setTotal] = useState(0);
@@ -70,12 +71,21 @@ export function Admin() {
     import("firebase/firestore").QueryDocumentSnapshot[]
   >([]);
 
+  const [stats, setStats] = useState<InquiryStats>({
+    total: 0,
+    New: 0,
+    Qualified: 0,
+    "Not Qualified": 0,
+    "In Progress": 0,
+    Completed: 0,
+  });
+
+  const [selectedRow, setSelectedRow] =
+    useState<SubmissionRow | null>(null);
+
   const [pwOpen, setPwOpen] = useState(false);
   const [pwMsg, setPwMsg] = useState<string | null>(null);
   const [pwPopup, setPwPopup] = useState(false);
-  const [exporting, setExporting] = useState(false);
-
-  const [viewing, setViewing] = useState<SubmissionRow | null>(null);
 
   useEffect(() => {
     return onAuthStateChanged(auth, (u) => {
@@ -84,13 +94,45 @@ export function Admin() {
     });
   }, []);
 
-  useEffect(() => {
-    if (!user) return;
+  async function loadStats() {
+    try {
+      const result = await getInquiryStats();
+      setStats(result);
+    } catch {
+      // Keep the dashboard usable if statistics temporarily fail.
+    }
+  }
 
-    void getInquiryStats()
-      .then(setStats)
-      .catch(() => undefined);
-  }, [user]);
+  async function loadPage(
+    cursor?: import("firebase/firestore").QueryDocumentSnapshot,
+    requestedPage = 1,
+  ) {
+    try {
+      const result = await listInquiriesPage(
+        cursor,
+        statusFilter,
+        appliedDateFrom || undefined,
+        appliedDateTo || undefined,
+      );
+
+      setRows(result.rows);
+      setTotal(result.total);
+      setPage(requestedPage);
+
+      if (requestedPage === 1) {
+        setCursors(result.last ? [result.last] : []);
+      } else if (result.last) {
+        setCursors((previous) => {
+          const next = [...previous];
+          next[requestedPage - 1] = result.last;
+          return next;
+        });
+      }
+    } catch {
+      setRows([]);
+      setTotal(0);
+    }
+  }
 
   useEffect(() => {
     if (!user) return;
@@ -98,33 +140,31 @@ export function Admin() {
     if (searchActive) {
       void searchInquiries(searchInput, statusFilter)
         .then(setRows)
-        .catch(() => undefined);
+        .catch(() => setRows([]));
 
       return;
     }
 
-    void listInquiriesPage(
-      undefined,
-      statusFilter,
-      dateFrom,
-      dateTo,
-    )
-      .then((r) => {
-        setRows(r.rows);
-        setTotal(r.total);
-        setPage(1);
-        setCursors(r.last ? [r.last] : []);
-      })
-      .catch(() => undefined);
-  }, [user, statusFilter, searchActive, dateFrom, dateTo]);
+    void loadPage(undefined, 1);
+    void loadStats();
+  }, [
+    user,
+    statusFilter,
+    appliedDateFrom,
+    appliedDateTo,
+    searchActive,
+  ]);
 
-  async function refreshStats() {
-    try {
-      setStats(await getInquiryStats());
-    } catch {
-      /* keep last known totals */
-    }
-  }
+  const displayedStats = useMemo(() => {
+    return {
+      total: stats.total,
+      New: stats.New,
+      Qualified: stats.Qualified,
+      "Not Qualified": stats["Not Qualified"],
+      "In Progress": stats["In Progress"],
+      Completed: stats.Completed,
+    };
+  }, [stats]);
 
   async function onAuth(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
@@ -140,12 +180,16 @@ export function Admin() {
     const password = String(fd.get("password") ?? "");
 
     if (email !== OWNER_EMAIL) {
-      setAuthError("This dashboard is restricted to the owner account.");
+      setAuthError(
+        "This dashboard is restricted to the owner account.",
+      );
       return;
     }
 
     if (password.length < 8) {
-      setAuthError("Password must be at least 8 characters.");
+      setAuthError(
+        "Password must be at least 8 characters.",
+      );
       return;
     }
 
@@ -153,35 +197,55 @@ export function Admin() {
     setAuthError(null);
 
     try {
-      await signInWithEmailAndPassword(auth, email, password);
+      await signInWithEmailAndPassword(
+        auth,
+        email,
+        password,
+      );
     } catch (err) {
       setAuthError(
-        err instanceof Error ? err.message : "Unable to sign in.",
+        err instanceof Error
+          ? err.message
+          : "Unable to sign in.",
       );
     } finally {
       setBusy(false);
     }
   }
 
-  async function onChangePassword(e: FormEvent<HTMLFormElement>) {
+  async function onChangePassword(
+    e: FormEvent<HTMLFormElement>,
+  ) {
     e.preventDefault();
 
     if (!user?.email) return;
 
     const fd = new FormData(e.currentTarget);
 
-    const current = String(fd.get("current") ?? "");
+    const current = String(
+      fd.get("current") ?? "",
+    );
+
     const next = String(fd.get("next") ?? "");
 
     if (next.length < 8) {
-      setPwMsg("New password must be at least 8 characters.");
+      setPwMsg(
+        "New password must be at least 8 characters.",
+      );
       return;
     }
 
     try {
-      const cred = EmailAuthProvider.credential(user.email, current);
+      const cred = EmailAuthProvider.credential(
+        user.email,
+        current,
+      );
 
-      await reauthenticateWithCredential(user, cred);
+      await reauthenticateWithCredential(
+        user,
+        cred,
+      );
+
       await updatePassword(user, next);
 
       setPwMsg(null);
@@ -198,20 +262,31 @@ export function Admin() {
     }
   }
 
-  async function onSearch(e: FormEvent<HTMLFormElement>) {
+  async function onSearch(
+    e: FormEvent<HTMLFormElement>,
+  ) {
     e.preventDefault();
 
     const term = searchInput.trim();
 
     if (!term) {
       setSearchActive(false);
+      await loadPage(undefined, 1);
       return;
     }
 
     setSearchActive(true);
 
-    const found = await searchInquiries(term, statusFilter);
-    setRows(found);
+    try {
+      const found = await searchInquiries(
+        term,
+        statusFilter,
+      );
+
+      setRows(found);
+    } catch {
+      setRows([]);
+    }
   }
 
   function clearSearch() {
@@ -219,11 +294,71 @@ export function Admin() {
     setSearchActive(false);
   }
 
-  function clearDates() {
-    setDateFrom("");
-    setDateTo("");
+  async function onFilter() {
+    if (
+      dateFrom &&
+      dateTo &&
+      dateFrom > dateTo
+    ) {
+      window.alert(
+        "The From Date cannot be later than the To Date.",
+      );
+      return;
+    }
+
+    setSearchActive(false);
+    setAppliedDateFrom(dateFrom);
+    setAppliedDateTo(dateTo);
     setPage(1);
     setCursors([]);
+
+    try {
+      const result = await listInquiriesPage(
+        undefined,
+        statusFilter,
+        dateFrom || undefined,
+        dateTo || undefined,
+      );
+
+      setRows(result.rows);
+      setTotal(result.total);
+
+      setCursors(
+        result.last ? [result.last] : [],
+      );
+
+      await loadStats();
+    } catch {
+      setRows([]);
+      setTotal(0);
+    }
+  }
+
+  async function clearDates() {
+    setDateFrom("");
+    setDateTo("");
+    setAppliedDateFrom("");
+    setAppliedDateTo("");
+    setSearchActive(false);
+    setPage(1);
+    setCursors([]);
+
+    try {
+      const result = await listInquiriesPage(
+        undefined,
+        statusFilter,
+      );
+
+      setRows(result.rows);
+      setTotal(result.total);
+
+      setCursors(
+        result.last ? [result.last] : [],
+      );
+    } catch {
+      setRows([]);
+      setTotal(0);
+    }
   }
 
   async function onDelete(row: SubmissionRow) {
@@ -239,114 +374,200 @@ export function Admin() {
       return;
     }
 
-    await deleteInquiry(row.id);
-
-    setRows((prev) => prev.filter((r) => r.id !== row.id));
-    setTotal((n) => Math.max(0, n - 1));
-
-    void refreshStats();
-  }
-
-  async function onStatusChange(
-    id: string,
-    status: SubmissionStatus,
-  ) {
-    await updateInquiryStatus(id, status);
-
-    setRows((prev) =>
-      prev.map((row) =>
-        row.id === id ? { ...row, status } : row,
-      ),
-    );
-
-    void refreshStats();
-  }
-
-  async function exportCsv() {
-    if (exporting) return;
-
-    setExporting(true);
-
     try {
-      const all = await exportAllInquiries();
+      await deleteInquiry(row.id);
 
-      const headers = [
-        "Reference Number",
-        "First Name",
-        "Last Name",
-        "Email",
-        "Phone",
-        "Property Address",
-        "Property Type",
-        "Owner Name",
-        "Parcel / PIN",
-        "Acreage",
-        "Additional Note",
-        "SMS Consent",
-        "Status",
-        "Submitted At",
-      ];
-
-      const lines = [headers.map(csvCell).join(",")];
-
-      for (const r of all) {
-        lines.push(
-          [
-            r.referenceNumber,
-            r.firstName,
-            r.lastName,
-            r.email,
-            r.phone,
-            r.propertyAddress,
-            r.propertyType,
-            r.ownerName,
-            r.parcelPin,
-            r.acreage,
-            r.additionalNote,
-            r.smsConsent ? "Yes" : "No",
-            r.status,
-            r.submittedAt,
-          ]
-            .map((v) => csvCell(String(v)))
-            .join(","),
-        );
-      }
-
-      const blob = new Blob(
-        [`\uFEFF${lines.join("\r\n")}`],
-        { type: "text/csv" },
+      setRows((previous) =>
+        previous.filter(
+          (r) => r.id !== row.id,
+        ),
       );
 
-      const a = document.createElement("a");
+      setTotal((n) =>
+        Math.max(0, n - 1),
+      );
 
-      a.href = URL.createObjectURL(blob);
-      a.download = "daughtridge-inquiries.csv";
-      a.click();
-
-      URL.revokeObjectURL(a.href);
-    } finally {
-      setExporting(false);
+      await loadStats();
+    } catch {
+      window.alert(
+        "Unable to delete this submission.",
+      );
     }
   }
 
-  async function loadFirstPage() {
-    const result = await listInquiriesPage(
-      undefined,
-      statusFilter,
-      dateFrom,
-      dateTo,
+  async function onStatusChange(
+    row: SubmissionRow,
+    status: SubmissionStatus,
+  ) {
+    try {
+      await updateInquiryStatus(
+        row.id,
+        status,
+      );
+
+      setRows((previous) =>
+        previous.map((item) =>
+          item.id === row.id
+            ? { ...item, status }
+            : item,
+        ),
+      );
+
+      await loadStats();
+    } catch {
+      window.alert(
+        "Unable to update the submission status.",
+      );
+    }
+  }
+
+  function exportCsv() {
+    if (rows.length === 0) {
+      window.alert(
+        "There are no submissions to export.",
+      );
+      return;
+    }
+
+    const headers = [
+      "Reference Number",
+      "First Name",
+      "Last Name",
+      "Email",
+      "Phone",
+      "Property Address",
+      "Property Type",
+      "Owner Name",
+      "Parcel / PIN",
+      "Acreage",
+      "Additional Note",
+      "SMS Consent",
+      "Terms Accepted",
+      "Privacy Accepted",
+      "Status",
+      "Submitted At",
+    ];
+
+    const lines = [
+      headers.map(csvCell).join(","),
+    ];
+
+    for (const r of rows) {
+      lines.push(
+        [
+          r.referenceNumber,
+          r.firstName,
+          r.lastName,
+          r.email,
+          r.phone,
+          r.propertyAddress,
+          r.propertyType,
+          r.ownerName,
+          r.parcelPin,
+          r.acreage,
+          r.additionalNote,
+          r.smsConsent ? "Yes" : "No",
+          r.termsAccepted ? "Yes" : "No",
+          r.privacyAccepted ? "Yes" : "No",
+          r.status,
+          formatDate(r.submittedAt),
+        ]
+          .map((value) =>
+            csvCell(String(value)),
+          )
+          .join(","),
+      );
+    }
+
+    const blob = new Blob(
+      [
+        `\uFEFF${lines.join("\r\n")}`,
+      ],
+      {
+        type: "text/csv;charset=utf-8",
+      },
     );
 
-    setRows(result.rows);
-    setTotal(result.total);
+    const url =
+      URL.createObjectURL(blob);
+
+    const a =
+      document.createElement("a");
+
+    a.href = url;
+    a.download =
+      "daughtridge-inquiries.csv";
+
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+
+    URL.revokeObjectURL(url);
+  }
+
+  async function goFirst() {
     setPage(1);
-    setCursors(result.last ? [result.last] : []);
+
+    try {
+      const result =
+        await listInquiriesPage(
+          undefined,
+          statusFilter,
+          appliedDateFrom || undefined,
+          appliedDateTo || undefined,
+        );
+
+      setRows(result.rows);
+      setTotal(result.total);
+
+      setCursors(
+        result.last
+          ? [result.last]
+          : [],
+      );
+    } catch {
+      // Ignore temporary loading error.
+    }
+  }
+
+  async function goNext() {
+    const cursor =
+      cursors[page - 1];
+
+    if (!cursor) return;
+
+    try {
+      const result =
+        await listInquiriesPage(
+          cursor,
+          statusFilter,
+          appliedDateFrom || undefined,
+          appliedDateTo || undefined,
+        );
+
+      setRows(result.rows);
+      setTotal(result.total);
+
+      setPage((previous) =>
+        previous + 1,
+      );
+
+      setCursors((previous) =>
+        result.last
+          ? [...previous, result.last]
+          : previous,
+      );
+    } catch {
+      // Ignore temporary loading error.
+    }
   }
 
   if (!ready) {
     return (
       <div className="admin-shell">
-        <p className="admin-muted">Opening dashboard…</p>
+        <p className="admin-muted">
+          Opening dashboard…
+        </p>
       </div>
     );
   }
@@ -355,7 +576,10 @@ export function Admin() {
     return (
       <div className="admin-shell">
         <header className="admin-header">
-          <a href="#/" className="logo-link">
+          <a
+            href="#/"
+            className="logo-link"
+          >
             <HeaderLogo />
           </a>
         </header>
@@ -369,26 +593,30 @@ export function Admin() {
             <h1>Admin Login</h1>
 
             <p className="admin-lead">
-              Owner access only. Sign in with the company email
-              and password.
+              Owner access only. Sign in
+              with the company email and
+              password.
             </p>
 
-            <form className="admin-form" onSubmit={onAuth}>
+            <form
+              className="admin-form"
+              onSubmit={onAuth}
+            >
               <label>
                 Email
-
                 <input
                   name="email"
                   type="email"
                   autoComplete="username"
-                  defaultValue={OWNER_EMAIL}
+                  defaultValue={
+                    OWNER_EMAIL
+                  }
                   required
                 />
               </label>
 
               <label>
                 Password
-
                 <input
                   name="password"
                   type="password"
@@ -399,7 +627,9 @@ export function Admin() {
               </label>
 
               {authError ? (
-                <p className="admin-error">{authError}</p>
+                <p className="admin-error">
+                  {authError}
+                </p>
               ) : null}
 
               <button
@@ -407,12 +637,16 @@ export function Admin() {
                 type="submit"
                 disabled={busy}
               >
-                {busy ? "Please wait…" : "Sign In"}
+                {busy
+                  ? "Please wait…"
+                  : "Sign In"}
               </button>
             </form>
 
             <p className="admin-back">
-              <a href="#/">Return to website</a>
+              <a href="#/">
+                Return to website
+              </a>
             </p>
           </div>
         </main>
@@ -429,16 +663,21 @@ export function Admin() {
           aria-modal="true"
         >
           <div className="admin-popup">
-            <h2>Password updated</h2>
+            <h2>
+              Password updated
+            </h2>
 
             <p>
-              Your password has been changed successfully.
+              Your password has been
+              changed successfully.
             </p>
 
             <button
               type="button"
               className="admin-btn"
-              onClick={() => setPwPopup(false)}
+              onClick={() =>
+                setPwPopup(false)
+              }
             >
               OK
             </button>
@@ -446,99 +685,202 @@ export function Admin() {
         </div>
       ) : null}
 
-      {viewing ? (
+      {selectedRow ? (
         <div
           className="admin-popup-backdrop"
           role="dialog"
           aria-modal="true"
+          onClick={() =>
+            setSelectedRow(null)
+          }
         >
           <div
-            className="admin-popup"
-            style={{
-              maxWidth: 650,
-              width: "calc(100% - 32px)",
-              maxHeight: "90vh",
-              overflow: "auto",
-            }}
+            className="admin-view-popup"
+            onClick={(e) =>
+              e.stopPropagation()
+            }
           >
-            <h2>Submission Details</h2>
+            <div className="admin-view-header">
+              <div>
+                <p className="admin-kicker">
+                  Submission Details
+                </p>
 
-            <p>
-              <strong>Reference:</strong>{" "}
-              {viewing.referenceNumber}
-            </p>
+                <h2>
+                  {selectedRow.firstName}{" "}
+                  {selectedRow.lastName}
+                </h2>
 
-            <p>
-              <strong>Name:</strong>{" "}
-              {viewing.firstName} {viewing.lastName}
-            </p>
+                <p className="admin-ref">
+                  {selectedRow.referenceNumber}
+                </p>
+              </div>
 
-            <p>
-              <strong>Email:</strong> {viewing.email}
-            </p>
+              <button
+                type="button"
+                className="admin-popup-close"
+                onClick={() =>
+                  setSelectedRow(null)
+                }
+                aria-label="Close"
+              >
+                ×
+              </button>
+            </div>
 
-            <p>
-              <strong>Phone:</strong> {viewing.phone}
-            </p>
+            <div className="admin-detail-grid">
+              <div>
+                <span>
+                  First Name
+                </span>
+                <strong>
+                  {selectedRow.firstName ||
+                    "—"}
+                </strong>
+              </div>
 
-            <p>
-              <strong>Property Address:</strong>{" "}
-              {viewing.propertyAddress || "—"}
-            </p>
+              <div>
+                <span>
+                  Last Name
+                </span>
+                <strong>
+                  {selectedRow.lastName ||
+                    "—"}
+                </strong>
+              </div>
 
-            <p>
-              <strong>Property Type:</strong>{" "}
-              {viewing.propertyType || "—"}
-            </p>
+              <div>
+                <span>Email</span>
+                <strong>
+                  {selectedRow.email ||
+                    "—"}
+                </strong>
+              </div>
 
-            <p>
-              <strong>Owner Name:</strong>{" "}
-              {viewing.ownerName || "—"}
-            </p>
+              <div>
+                <span>Phone</span>
+                <strong>
+                  {selectedRow.phone ||
+                    "—"}
+                </strong>
+              </div>
 
-            <p>
-              <strong>Parcel / PIN:</strong>{" "}
-              {viewing.parcelPin || "—"}
-            </p>
+              <div className="full-width">
+                <span>
+                  Property Address
+                </span>
+                <strong>
+                  {selectedRow.propertyAddress ||
+                    "—"}
+                </strong>
+              </div>
 
-            <p>
-              <strong>Acreage:</strong>{" "}
-              {viewing.acreage || "—"}
-            </p>
+              <div>
+                <span>
+                  Property Type
+                </span>
+                <strong>
+                  {selectedRow.propertyType ||
+                    "—"}
+                </strong>
+              </div>
 
-            <p>
-              <strong>Additional Note:</strong>{" "}
-              {viewing.additionalNote || "—"}
-            </p>
+              <div>
+                <span>
+                  Owner Name
+                </span>
+                <strong>
+                  {selectedRow.ownerName ||
+                    "—"}
+                </strong>
+              </div>
 
-            <p>
-              <strong>SMS Consent:</strong>{" "}
-              {viewing.smsConsent ? "Yes" : "No"}
-            </p>
+              <div>
+                <span>
+                  Parcel / PIN
+                </span>
+                <strong>
+                  {selectedRow.parcelPin ||
+                    "—"}
+                </strong>
+              </div>
 
-            <p>
-              <strong>Terms Accepted:</strong>{" "}
-              {viewing.termsAccepted ? "Yes" : "No"}
-            </p>
+              <div>
+                <span>Acreage</span>
+                <strong>
+                  {selectedRow.acreage ||
+                    "—"}
+                </strong>
+              </div>
 
-            <p>
-              <strong>Privacy Accepted:</strong>{" "}
-              {viewing.privacyAccepted ? "Yes" : "No"}
-            </p>
+              <div>
+                <span>Status</span>
+                <strong>
+                  {selectedRow.status}
+                </strong>
+              </div>
 
-            <p>
-              <strong>Status:</strong> {viewing.status}
-            </p>
+              <div>
+                <span>
+                  SMS Consent
+                </span>
+                <strong>
+                  {selectedRow.smsConsent
+                    ? "Yes"
+                    : "No"}
+                </strong>
+              </div>
 
-            <p>
-              <strong>Submitted:</strong>{" "}
-              {formatDate(viewing.submittedAt)}
-            </p>
+              <div>
+                <span>
+                  Terms Accepted
+                </span>
+                <strong>
+                  {selectedRow.termsAccepted
+                    ? "Yes"
+                    : "No"}
+                </strong>
+              </div>
+
+              <div>
+                <span>
+                  Privacy Accepted
+                </span>
+                <strong>
+                  {selectedRow.privacyAccepted
+                    ? "Yes"
+                    : "No"}
+                </strong>
+              </div>
+
+              <div>
+                <span>
+                  Submitted At
+                </span>
+                <strong>
+                  {formatDate(
+                    selectedRow.submittedAt,
+                  )}
+                </strong>
+              </div>
+
+              <div className="full-width">
+                <span>
+                  Additional Note
+                </span>
+                <strong className="note-value">
+                  {selectedRow.additionalNote ||
+                    "—"}
+                </strong>
+              </div>
+            </div>
 
             <button
               type="button"
               className="admin-btn"
-              onClick={() => setViewing(null)}
+              onClick={() =>
+                setSelectedRow(null)
+              }
             >
               Close
             </button>
@@ -547,81 +889,107 @@ export function Admin() {
       ) : null}
 
       <header className="admin-header">
-        <span>Owner</span>
+        <div className="admin-header-spacer" />
 
-        <div>
+        <div className="admin-header-right">
+          <span>Owner</span>
+
           <button
             type="button"
-            className="admin-btn-ghost"
-            onClick={() => setPwOpen((v) => !v)}
+            className="admin-header-ghost"
+            onClick={() =>
+              setPwOpen((value) => !value)
+            }
           >
-            Change password
+            Change Password
           </button>
 
           <button
             type="button"
-            className="admin-btn-ghost"
-            onClick={() => void signOut(auth)}
+            className="admin-header-ghost"
+            onClick={() =>
+              void signOut(auth)
+            }
           >
-            Sign out
+            Sign Out
           </button>
         </div>
       </header>
 
       <main className="admin-main">
-        <h1>Daughtridge Investment Group LLC</h1>
+        <h1>
+          Daughtridge Investment Group LLC
+        </h1>
 
         <p className="admin-subtitle">
           Admin Dashboard
         </p>
 
         {pwOpen ? (
-          <form
-            className="admin-form"
-            onSubmit={onChangePassword}
-            style={{ maxWidth: 420 }}
-          >
-            <label>
-              Current password
-              <input
-                name="current"
-                type="password"
-                required
-              />
-            </label>
+          <div className="admin-pw">
+            <h2>
+              Change Password
+            </h2>
 
-            <label>
-              New password
-              <input
-                name="next"
-                type="password"
-                minLength={8}
-                required
-              />
-            </label>
-
-            {pwMsg ? <p>{pwMsg}</p> : null}
-
-            <button
-              className="admin-btn"
-              type="submit"
+            <form
+              className="admin-form"
+              onSubmit={onChangePassword}
             >
-              Save password
-            </button>
-          </form>
+              <label>
+                Current Password
+                <input
+                  name="current"
+                  type="password"
+                  required
+                />
+              </label>
+
+              <label>
+                New Password
+                <input
+                  name="next"
+                  type="password"
+                  minLength={8}
+                  required
+                />
+              </label>
+
+              {pwMsg ? (
+                <p className="admin-error">
+                  {pwMsg}
+                </p>
+              ) : null}
+
+              <button
+                className="admin-btn"
+                type="submit"
+              >
+                Save Password
+              </button>
+            </form>
+          </div>
         ) : null}
 
         <div className="admin-stats">
-          <span>
-            <strong>{stats.total}</strong>{" "}
-            Total Submissions
-          </span>
-
-          {STATUSES.map((s) => (
-            <span key={s}>
-              <strong>{stats[s]}</strong> {s}
+          <div>
+            <strong>
+              {displayedStats.total}
+            </strong>
+            <span>
+              Total Submissions
             </span>
-          ))}
+          </div>
+
+          {STATUSES.map(
+            (status) => (
+              <div key={status}>
+                <strong>
+                  {displayedStats[status]}
+                </strong>
+                <span>{status}</span>
+              </div>
+            ),
+          )}
         </div>
 
         <div className="admin-toolbar">
@@ -631,12 +999,13 @@ export function Admin() {
           >
             <label>
               Client / Reference
-
               <input
                 type="search"
                 value={searchInput}
                 onChange={(e) =>
-                  setSearchInput(e.target.value)
+                  setSearchInput(
+                    e.target.value,
+                  )
                 }
                 placeholder="First name, last name, or DIG-…"
               />
@@ -662,7 +1031,6 @@ export function Admin() {
 
           <label>
             Status
-
             <select
               value={statusFilter}
               onChange={(e) =>
@@ -677,66 +1045,78 @@ export function Admin() {
                 All statuses
               </option>
 
-              {STATUSES.map((s) => (
-                <option key={s}>{s}</option>
-              ))}
+              {STATUSES.map(
+                (status) => (
+                  <option
+                    key={status}
+                    value={status}
+                  >
+                    {status}
+                  </option>
+                ),
+              )}
             </select>
           </label>
+        </div>
 
+        <div className="admin-date-filter">
           <label>
-            From date
-
+            From Date
             <input
               type="date"
               value={dateFrom}
               onChange={(e) =>
-                setDateFrom(e.target.value)
+                setDateFrom(
+                  e.target.value,
+                )
               }
             />
           </label>
 
           <label>
-            To date
-
+            To Date
             <input
               type="date"
               value={dateTo}
               onChange={(e) =>
-                setDateTo(e.target.value)
+                setDateTo(
+                  e.target.value,
+                )
               }
             />
           </label>
 
           <button
             type="button"
-            className="admin-btn-ghost"
-            onClick={clearDates}
-            disabled={!dateFrom && !dateTo}
-          >
-            Clear Dates
-          </button>
-
-          <button
-            type="button"
             className="admin-btn"
-            onClick={() => void loadFirstPage()}
+            onClick={() =>
+              void onFilter()
+            }
           >
             Filter
           </button>
 
           <button
             type="button"
-            className="admin-btn"
-            onClick={() => void exportCsv()}
-            disabled={exporting}
+            className="admin-btn-ghost"
+            onClick={() =>
+              void clearDates()
+            }
           >
-            {exporting
-              ? "Exporting…"
-              : "Export to Excel/CSV"}
+            Clear Dates
+          </button>
+
+          <button
+            type="button"
+            className="admin-export"
+            onClick={exportCsv}
+            disabled={rows.length === 0}
+          >
+            Export to Excel/CSV
           </button>
         </div>
 
-        <div style={{ overflow: "auto" }}>
+        <div className="admin-table-wrap">
           <table className="admin-table">
             <thead>
               <tr>
@@ -754,67 +1134,84 @@ export function Admin() {
                   <td colSpan={5}>
                     {searchActive
                       ? "No clients match that search."
-                      : "No submissions yet."}
+                      : "No submissions found."}
                   </td>
                 </tr>
               ) : (
-                rows.map((r) => (
-                  <tr key={r.id}>
+                rows.map((row) => (
+                  <tr key={row.id}>
                     <td>
-                      {r.firstName} {r.lastName}
+                      <strong>
+                        {row.firstName}{" "}
+                        {row.lastName}
+                      </strong>
+
                       <br />
+
                       <small>
-                        {r.referenceNumber}
+                        {row.referenceNumber}
                       </small>
                     </td>
 
                     <td>
-                      {r.propertyAddress || "—"}
+                      {row.propertyAddress ||
+                        "—"}
                     </td>
 
                     <td>
-                      {r.propertyType || "—"}
+                      {row.propertyType ||
+                        "—"}
                     </td>
 
                     <td>
                       <select
                         className="admin-status-select"
-                        value={r.status}
-                        onChange={(e) => {
+                        value={row.status}
+                        onChange={(e) =>
                           void onStatusChange(
-                            r.id,
-                            e.target.value as SubmissionStatus,
-                          );
-                        }}
+                            row,
+                            e.target
+                              .value as SubmissionStatus,
+                          )
+                        }
                       >
-                        {STATUSES.map((s) => (
-                          <option key={s}>
-                            {s}
-                          </option>
-                        ))}
+                        {STATUSES.map(
+                          (status) => (
+                            <option
+                              key={status}
+                              value={status}
+                            >
+                              {status}
+                            </option>
+                          ),
+                        )}
                       </select>
                     </td>
 
                     <td>
-                      <button
-                        type="button"
-                        className="admin-btn-ghost"
-                        onClick={() =>
-                          setViewing(r)
-                        }
-                      >
-                        VIEW
-                      </button>{" "}
+                      <div className="admin-actions">
+                        <button
+                          type="button"
+                          className="admin-view"
+                          onClick={() =>
+                            setSelectedRow(
+                              row,
+                            )
+                          }
+                        >
+                          View
+                        </button>
 
-                      <button
-                        type="button"
-                        className="admin-delete"
-                        onClick={() =>
-                          void onDelete(r)
-                        }
-                      >
-                        DELETE
-                      </button>
+                        <button
+                          type="button"
+                          className="admin-delete"
+                          onClick={() =>
+                            void onDelete(row)
+                          }
+                        >
+                          Delete
+                        </button>
+                      </div>
                     </td>
                   </tr>
                 ))
@@ -824,75 +1221,45 @@ export function Admin() {
         </div>
 
         {!searchActive ? (
-          <p className="admin-pager">
-            Page {page} · {PAGE_SIZE} per page ·{" "}
-            {total} total
+          <div className="admin-pager">
+            <div>
+              Page {page} ·{" "}
+              {PAGE_SIZE} per page ·{" "}
+              {total} total
+            </div>
 
-            <br />
+            <div className="admin-pager-buttons">
+              <button
+                type="button"
+                className="admin-btn"
+                disabled={page <= 1}
+                onClick={() =>
+                  void goFirst()
+                }
+              >
+                First
+              </button>
 
-            <button
-              type="button"
-              className="admin-btn"
-              disabled={page <= 1}
-              onClick={() => {
-                setPage(1);
-
-                void listInquiriesPage(
-                  undefined,
-                  statusFilter,
-                  dateFrom,
-                  dateTo,
-                ).then((r) => {
-                  setRows(r.rows);
-                  setTotal(r.total);
-                  setCursors(
-                    r.last ? [r.last] : [],
-                  );
-                });
-              }}
-            >
-              First
-            </button>{" "}
-
-            <button
-              type="button"
-              className="admin-btn"
-              disabled={
-                !cursors[page - 1] ||
-                rows.length < PAGE_SIZE
-              }
-              onClick={() => {
-                const cursor =
-                  cursors[page - 1];
-
-                if (!cursor) return;
-
-                void listInquiriesPage(
-                  cursor,
-                  statusFilter,
-                  dateFrom,
-                  dateTo,
-                ).then((r) => {
-                  setRows(r.rows);
-                  setTotal(r.total);
-                  setPage((p) => p + 1);
-
-                  setCursors((prev) =>
-                    r.last
-                      ? [...prev, r.last]
-                      : prev,
-                  );
-                });
-              }}
-            >
-              Next
-            </button>
-          </p>
+              <button
+                type="button"
+                className="admin-btn"
+                disabled={
+                  rows.length <
+                    PAGE_SIZE ||
+                  !cursors[page - 1]
+                }
+                onClick={() =>
+                  void goNext()
+                }
+              >
+                Next
+              </button>
+            </div>
+          </div>
         ) : (
           <p className="admin-pager">
-            Showing up to {PAGE_SIZE} matches.
-            Search uses name/reference prefix plus
-            the selected status.
+            Showing up to {PAGE_SIZE}{" "}
+            search matches.
           </p>
         )}
       </main>
