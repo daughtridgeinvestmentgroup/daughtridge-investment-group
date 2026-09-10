@@ -1,5 +1,5 @@
-import { httpsCallable } from "firebase/functions";
 import {
+  addDoc,
   collection,
   deleteDoc,
   doc,
@@ -8,6 +8,7 @@ import {
   limit,
   orderBy,
   query,
+  serverTimestamp,
   startAfter,
   updateDoc,
   where,
@@ -15,7 +16,7 @@ import {
   type QueryConstraint,
   type QueryDocumentSnapshot,
 } from "firebase/firestore";
-import { db, functions } from "./firebase";
+import { db } from "./firebase";
 
 export const PROPERTY_TYPES = [
   "Single-Family Home",
@@ -30,6 +31,7 @@ export const PROPERTY_TYPES = [
 ] as const;
 
 export const PAGE_SIZE = 25;
+
 export const STATUSES = [
   "New",
   "Qualified",
@@ -37,6 +39,7 @@ export const STATUSES = [
   "In Progress",
   "Completed",
 ] as const;
+
 export type SubmissionStatus = (typeof STATUSES)[number];
 
 export type SubmissionRow = {
@@ -63,6 +66,27 @@ export type InquiryStats = {
   total: number;
 } & Record<SubmissionStatus, number>;
 
+/**
+ * Creates a readable reference number without requiring Cloud Functions.
+ * The Firestore document ID remains the actual unique database identifier.
+ */
+function createReferenceNumber(): string {
+  const date = new Date();
+
+  const datePart =
+    `${date.getFullYear()}` +
+    `${String(date.getMonth() + 1).padStart(2, "0")}` +
+    `${String(date.getDate()).padStart(2, "0")}`;
+
+  const randomPart = crypto
+    .randomUUID()
+    .replace(/-/g, "")
+    .slice(0, 8)
+    .toUpperCase();
+
+  return `DIG-${datePart}-${randomPart}`;
+}
+
 export async function submitInquiry({
   data,
 }: {
@@ -83,17 +107,57 @@ export async function submitInquiry({
     honey?: string;
   };
 }) {
-  const fn = httpsCallable<typeof data, { ok: true; referenceNumber?: string }>(
-    functions,
-    "submitInquiry",
-  );
-  const result = await fn(data);
-  return result.data;
+  /*
+   * The honeypot field is intentionally checked on the client.
+   * It is not stored in Firestore.
+   */
+  if (data.honey?.trim()) {
+    return {
+      ok: true as const,
+    };
+  }
+
+  if (!data.termsAccepted || !data.privacyAccepted) {
+    throw new Error(
+      "You must accept the Terms & Conditions and Privacy Policy.",
+    );
+  }
+
+  const referenceNumber = createReferenceNumber();
+
+  await addDoc(collection(db, "inquiries"), {
+    referenceNumber,
+
+    firstName: data.firstName.trim(),
+    lastName: data.lastName.trim(),
+    email: data.email.trim(),
+    phone: data.phone.trim(),
+    propertyAddress: data.propertyAddress.trim(),
+    propertyType: data.propertyType.trim(),
+    ownerName: data.ownerName.trim(),
+    parcelPin: data.parcelPin.trim(),
+    acreage: data.acreage.trim(),
+    additionalNote: data.additionalNote.trim(),
+
+    smsConsent: Boolean(data.smsConsent),
+    termsAccepted: Boolean(data.termsAccepted),
+    privacyAccepted: Boolean(data.privacyAccepted),
+
+    status: "New",
+
+    submittedAt: serverTimestamp(),
+  });
+
+  return {
+    ok: true as const,
+    referenceNumber,
+  };
 }
 
 function mapDoc(d: QueryDocumentSnapshot<DocumentData>): SubmissionRow {
   const x = d.data();
   const submitted = x.submittedAt?.toDate?.() ?? new Date();
+
   return {
     id: d.id,
     referenceNumber: String(x.referenceNumber ?? ""),
@@ -122,6 +186,7 @@ export async function listInquiriesPage(
   status: "all" | SubmissionStatus = "all",
 ) {
   const col = collection(db, "inquiries");
+
   const filters =
     status === "all"
       ? [orderBy("submittedAt", "desc"), limit(PAGE_SIZE)]
@@ -130,13 +195,24 @@ export async function listInquiriesPage(
           orderBy("submittedAt", "desc"),
           limit(PAGE_SIZE),
         ];
+
   const q = cursor
-    ? query(col, ...filters.slice(0, -1), startAfter(cursor), limit(PAGE_SIZE))
+    ? query(
+        col,
+        ...filters.slice(0, -1),
+        startAfter(cursor),
+        limit(PAGE_SIZE),
+      )
     : query(col, ...filters);
+
   const snap = await getDocs(q);
+
   const countSnap = await getCountFromServer(
-    status === "all" ? query(col) : query(col, where("status", "==", status)),
+    status === "all"
+      ? query(col)
+      : query(col, where("status", "==", status)),
   );
+
   return {
     rows: snap.docs.map(mapDoc),
     last: snap.docs[snap.docs.length - 1] ?? null,
@@ -152,8 +228,17 @@ function prefixQuery(
 ) {
   const col = collection(db, "inquiries");
   const parts: QueryConstraint[] = [];
-  if (status !== "all") parts.push(where("status", "==", status));
-  parts.push(where(field, ">=", start), where(field, "<=", end), limit(PAGE_SIZE));
+
+  if (status !== "all") {
+    parts.push(where("status", "==", status));
+  }
+
+  parts.push(
+    where(field, ">=", start),
+    where(field, "<=", end),
+    limit(PAGE_SIZE),
+  );
+
   return getDocs(query(col, ...parts));
 }
 
@@ -162,9 +247,12 @@ export async function searchInquiries(
   status: "all" | SubmissionStatus = "all",
 ): Promise<SubmissionRow[]> {
   const raw = term.trim();
+
   if (!raw) return [];
+
   const lower = raw.toLowerCase();
   const upper = raw.toUpperCase();
+
   const lowerEnd = `${lower}\uf8ff`;
   const upperEnd = `${upper}\uf8ff`;
 
@@ -175,20 +263,26 @@ export async function searchInquiries(
   ]);
 
   const byId = new Map<string, SubmissionRow>();
+
   for (const snap of snaps) {
-    for (const d of snap.docs) byId.set(d.id, mapDoc(d));
+    for (const d of snap.docs) {
+      byId.set(d.id, mapDoc(d));
+    }
   }
+
   return [...byId.values()].slice(0, PAGE_SIZE);
 }
 
 export async function getInquiryStats(): Promise<InquiryStats> {
   const col = collection(db, "inquiries");
+
   const [totalSnap, ...statusSnaps] = await Promise.all([
     getCountFromServer(query(col)),
     ...STATUSES.map((status) =>
       getCountFromServer(query(col, where("status", "==", status))),
     ),
   ]);
+
   const stats = {
     total: totalSnap.data().count,
     New: 0,
@@ -197,16 +291,20 @@ export async function getInquiryStats(): Promise<InquiryStats> {
     "In Progress": 0,
     Completed: 0,
   } as InquiryStats;
+
   STATUSES.forEach((status, i) => {
     stats[status] = statusSnaps[i].data().count;
   });
+
   return stats;
 }
 
 export async function exportAllInquiries(): Promise<SubmissionRow[]> {
   const col = collection(db, "inquiries");
   const rows: SubmissionRow[] = [];
+
   let cursor: QueryDocumentSnapshot<DocumentData> | undefined;
+
   for (;;) {
     const q = cursor
       ? query(
@@ -216,15 +314,23 @@ export async function exportAllInquiries(): Promise<SubmissionRow[]> {
           limit(500),
         )
       : query(col, orderBy("submittedAt", "desc"), limit(500));
+
     const snap = await getDocs(q);
+
     rows.push(...snap.docs.map(mapDoc));
+
     if (snap.docs.length < 500) break;
+
     cursor = snap.docs[snap.docs.length - 1];
   }
+
   return rows;
 }
 
-export async function updateInquiryStatus(id: string, status: SubmissionStatus) {
+export async function updateInquiryStatus(
+  id: string,
+  status: SubmissionStatus,
+) {
   await updateDoc(doc(db, "inquiries", id), { status });
 }
 
