@@ -10,7 +10,6 @@ import {
   query,
   serverTimestamp,
   startAfter,
-  updateDoc,
   where,
   type DocumentData,
   type QueryConstraint,
@@ -66,10 +65,6 @@ export type InquiryStats = {
   total: number;
 } & Record<SubmissionStatus, number>;
 
-/**
- * Creates a readable reference number without requiring Cloud Functions.
- * The Firestore document ID remains the actual unique database identifier.
- */
 function createReferenceNumber(): string {
   const date = new Date();
 
@@ -107,10 +102,6 @@ export async function submitInquiry({
     honey?: string;
   };
 }) {
-  /*
-   * The honeypot field is intentionally checked on the client.
-   * It is not stored in Firestore.
-   */
   if (data.honey?.trim()) {
     return {
       ok: true as const,
@@ -130,6 +121,11 @@ export async function submitInquiry({
 
     firstName: data.firstName.trim(),
     lastName: data.lastName.trim(),
+
+    // Used by the Admin Dashboard search.
+    firstNameLower: data.firstName.trim().toLowerCase(),
+    lastNameLower: data.lastName.trim().toLowerCase(),
+
     email: data.email.trim(),
     phone: data.phone.trim(),
     propertyAddress: data.propertyAddress.trim(),
@@ -181,36 +177,65 @@ function mapDoc(d: QueryDocumentSnapshot<DocumentData>): SubmissionRow {
   };
 }
 
+function dateConstraints(
+  dateFrom?: string,
+  dateTo?: string,
+): QueryConstraint[] {
+  const parts: QueryConstraint[] = [];
+
+  if (dateFrom) {
+    parts.push(
+      where("submittedAt", ">=", new Date(`${dateFrom}T00:00:00`)),
+    );
+  }
+
+  if (dateTo) {
+    parts.push(
+      where("submittedAt", "<", new Date(`${dateTo}T00:00:00`).getTime()
+        ? new Date(
+            new Date(`${dateTo}T00:00:00`).getTime() + 24 * 60 * 60 * 1000,
+          )
+        : new Date(`${dateTo}T23:59:59.999`)),
+    );
+  }
+
+  return parts;
+}
+
 export async function listInquiriesPage(
   cursor?: QueryDocumentSnapshot<DocumentData>,
   status: "all" | SubmissionStatus = "all",
+  dateFrom?: string,
+  dateTo?: string,
 ) {
   const col = collection(db, "inquiries");
+  const constraints: QueryConstraint[] = [];
 
-  const filters =
-    status === "all"
-      ? [orderBy("submittedAt", "desc"), limit(PAGE_SIZE)]
-      : [
-          where("status", "==", status),
-          orderBy("submittedAt", "desc"),
-          limit(PAGE_SIZE),
-        ];
+  if (status !== "all") {
+    constraints.push(where("status", "==", status));
+  }
 
-  const q = cursor
-    ? query(
-        col,
-        ...filters.slice(0, -1),
-        startAfter(cursor),
-        limit(PAGE_SIZE),
-      )
-    : query(col, ...filters);
+  constraints.push(...dateConstraints(dateFrom, dateTo));
+  constraints.push(orderBy("submittedAt", "desc"));
 
-  const snap = await getDocs(q);
+  if (cursor) {
+    constraints.push(startAfter(cursor));
+  }
+
+  constraints.push(limit(PAGE_SIZE));
+
+  const snap = await getDocs(query(col, ...constraints));
+
+  const countConstraints: QueryConstraint[] = [];
+
+  if (status !== "all") {
+    countConstraints.push(where("status", "==", status));
+  }
+
+  countConstraints.push(...dateConstraints(dateFrom, dateTo));
 
   const countSnap = await getCountFromServer(
-    status === "all"
-      ? query(col)
-      : query(col, where("status", "==", status)),
+    query(col, ...countConstraints),
   );
 
   return {
