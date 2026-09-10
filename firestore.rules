@@ -1,10 +1,18 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
+    function isOwner() {
+      return request.auth != null
+        && request.auth.token.email == 'daughtridgeinvestmentgroup@gmail.com';
+    }
+
     match /inquiries/{id} {
-      allow create: if true;
-      allow read, update: if request.auth != null;
-      allow delete: if false;
+      allow read, update, delete: if isOwner();
+      allow create: if false;
+    }
+
+    match /counters/{day} {
+      allow read, write: if false;
     }
   }
 }
