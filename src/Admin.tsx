@@ -1,6 +1,5 @@
-import { useEffect, useMemo, useState, type FormEvent } from "react";
+import { useEffect, useState, type FormEvent } from "react";
 import {
-  createUserWithEmailAndPassword,
   onAuthStateChanged,
   signInWithEmailAndPassword,
   signOut,
@@ -11,13 +10,28 @@ import {
 } from "firebase/auth";
 import { auth, OWNER_EMAIL } from "./firebase";
 import {
+  PAGE_SIZE,
   STATUSES,
-  listInquiries,
+  deleteInquiry,
+  exportAllInquiries,
+  getInquiryStats,
+  listInquiriesPage,
+  searchInquiries,
   updateInquiryStatus,
+  type InquiryStats,
   type SubmissionRow,
   type SubmissionStatus,
 } from "./inquiries";
 import { HeaderLogo } from "./logo";
+
+const EMPTY_STATS: InquiryStats = {
+  total: 0,
+  New: 0,
+  Qualified: 0,
+  "Not Qualified": 0,
+  "In Progress": 0,
+  Completed: 0,
+};
 
 function csvCell(value: string) {
   if (/[",\n\r]/.test(value)) return `"${value.replace(/"/g, '""')}"`;
@@ -27,14 +41,22 @@ function csvCell(value: string) {
 export function Admin() {
   const [user, setUser] = useState<User | null>(null);
   const [ready, setReady] = useState(false);
-  const [mode, setMode] = useState<"signin" | "signup">("signin");
   const [authError, setAuthError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [rows, setRows] = useState<SubmissionRow[]>([]);
+  const [stats, setStats] = useState<InquiryStats>(EMPTY_STATS);
   const [statusFilter, setStatusFilter] = useState<"all" | SubmissionStatus>("all");
-  const [clientFilter, setClientFilter] = useState("all");
+  const [searchInput, setSearchInput] = useState("");
+  const [searchActive, setSearchActive] = useState(false);
+  const [page, setPage] = useState(1);
+  const [total, setTotal] = useState(0);
+  const [cursors, setCursors] = useState<
+    import("firebase/firestore").QueryDocumentSnapshot[]
+  >([]);
   const [pwOpen, setPwOpen] = useState(false);
   const [pwMsg, setPwMsg] = useState<string | null>(null);
+  const [pwPopup, setPwPopup] = useState(false);
+  const [exporting, setExporting] = useState(false);
 
   useEffect(() => {
     return onAuthStateChanged(auth, (u) => {
@@ -45,34 +67,47 @@ export function Admin() {
 
   useEffect(() => {
     if (!user) return;
-    void listInquiries().then(setRows).catch(() => undefined);
+    void getInquiryStats().then(setStats).catch(() => undefined);
   }, [user]);
 
-  const stats = useMemo(() => {
-    const counts: Record<SubmissionStatus, number> = {
-      New: 0,
-      Qualified: 0,
-      "Not Qualified": 0,
-      "In Progress": 0,
-      Completed: 0,
-    };
-    for (const r of rows) counts[r.status] += 1;
-    return counts;
-  }, [rows]);
+  useEffect(() => {
+    if (!user) return;
+    if (searchActive) {
+      void searchInquiries(searchInput, statusFilter)
+        .then(setRows)
+        .catch(() => undefined);
+      return;
+    }
+    void listInquiriesPage(undefined, statusFilter)
+      .then((r) => {
+        setRows(r.rows);
+        setTotal(r.total);
+        setPage(1);
+        setCursors(r.last ? [r.last] : []);
+      })
+      .catch(() => undefined);
+  }, [user, statusFilter, searchActive]);
 
-  const filtered = rows.filter((r) => {
-    if (clientFilter !== "all" && r.id !== clientFilter) return false;
-    if (statusFilter !== "all" && r.status !== statusFilter) return false;
-    return true;
-  });
+  async function refreshStats() {
+    try {
+      setStats(await getInquiryStats());
+    } catch {
+      /* keep last known totals */
+    }
+  }
 
   async function onAuth(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
     if (busy) return;
     const fd = new FormData(e.currentTarget);
-    const email = String(fd.get("email") ?? "").trim().toLowerCase();
+    const email = String(fd.get("email") ?? "")
+      .trim()
+      .toLowerCase();
     const password = String(fd.get("password") ?? "");
-    const confirm = String(fd.get("confirm") ?? "");
+    if (email !== OWNER_EMAIL) {
+      setAuthError("This dashboard is restricted to the owner account.");
+      return;
+    }
     if (password.length < 8) {
       setAuthError("Password must be at least 8 characters.");
       return;
@@ -80,12 +115,7 @@ export function Admin() {
     setBusy(true);
     setAuthError(null);
     try {
-      if (mode === "signup") {
-        if (password !== confirm) throw new Error("Passwords do not match.");
-        await createUserWithEmailAndPassword(auth, email, password);
-      } else {
-        await signInWithEmailAndPassword(auth, email, password);
-      }
+      await signInWithEmailAndPassword(auth, email, password);
     } catch (err) {
       setAuthError(err instanceof Error ? err.message : "Unable to sign in.");
     } finally {
@@ -107,58 +137,105 @@ export function Admin() {
       const cred = EmailAuthProvider.credential(user.email, current);
       await reauthenticateWithCredential(user, cred);
       await updatePassword(user, next);
-      setPwMsg("Password updated.");
+      setPwMsg(null);
+      setPwOpen(false);
+      setPwPopup(true);
       e.currentTarget.reset();
     } catch (err) {
       setPwMsg(err instanceof Error ? err.message : "Unable to change password.");
     }
   }
 
-  function exportCsv() {
-    const headers = [
-      "Reference Number",
-      "First Name",
-      "Last Name",
-      "Email",
-      "Phone",
-      "Property Address",
-      "Property Type",
-      "Owner Name",
-      "Parcel / PIN",
-      "Acreage",
-      "Additional Note",
-      "SMS Consent",
-      "Status",
-      "Submitted At",
-    ];
-    const lines = [headers.map(csvCell).join(",")];
-    for (const r of rows) {
-      lines.push(
-        [
-          r.referenceNumber,
-          r.firstName,
-          r.lastName,
-          r.email,
-          r.phone,
-          r.propertyAddress,
-          r.propertyType,
-          r.ownerName,
-          r.parcelPin,
-          r.acreage,
-          r.additionalNote,
-          r.smsConsent ? "Yes" : "No",
-          r.status,
-          r.submittedAt,
-        ]
-          .map((v) => csvCell(String(v)))
-          .join(","),
-      );
+  async function onSearch(e: FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+    const term = searchInput.trim();
+    if (!term) {
+      setSearchActive(false);
+      return;
     }
-    const blob = new Blob([`\uFEFF${lines.join("\r\n")}`], { type: "text/csv" });
-    const a = document.createElement("a");
-    a.href = URL.createObjectURL(blob);
-    a.download = "daughtridge-inquiries.csv";
-    a.click();
+    setSearchActive(true);
+    const found = await searchInquiries(term, statusFilter);
+    setRows(found);
+  }
+
+  function clearSearch() {
+    setSearchInput("");
+    setSearchActive(false);
+  }
+
+  async function onDelete(row: SubmissionRow) {
+    const name = `${row.firstName} ${row.lastName}`.trim() || row.referenceNumber;
+    if (
+      !window.confirm(
+        `Delete ${name} (${row.referenceNumber})? This cannot be undone.`,
+      )
+    ) {
+      return;
+    }
+    await deleteInquiry(row.id);
+    setRows((prev) => prev.filter((r) => r.id !== row.id));
+    setTotal((n) => Math.max(0, n - 1));
+    void refreshStats();
+  }
+
+  async function onStatusChange(id: string, status: SubmissionStatus) {
+    await updateInquiryStatus(id, status);
+    setRows((prev) => prev.map((row) => (row.id === id ? { ...row, status } : row)));
+    void refreshStats();
+  }
+
+  async function exportCsv() {
+    if (exporting) return;
+    setExporting(true);
+    try {
+      const all = await exportAllInquiries();
+      const headers = [
+        "Reference Number",
+        "First Name",
+        "Last Name",
+        "Email",
+        "Phone",
+        "Property Address",
+        "Property Type",
+        "Owner Name",
+        "Parcel / PIN",
+        "Acreage",
+        "Additional Note",
+        "SMS Consent",
+        "Status",
+        "Submitted At",
+      ];
+      const lines = [headers.map(csvCell).join(",")];
+      for (const r of all) {
+        lines.push(
+          [
+            r.referenceNumber,
+            r.firstName,
+            r.lastName,
+            r.email,
+            r.phone,
+            r.propertyAddress,
+            r.propertyType,
+            r.ownerName,
+            r.parcelPin,
+            r.acreage,
+            r.additionalNote,
+            r.smsConsent ? "Yes" : "No",
+            r.status,
+            r.submittedAt,
+          ]
+            .map((v) => csvCell(String(v)))
+            .join(","),
+        );
+      }
+      const blob = new Blob([`\uFEFF${lines.join("\r\n")}`], { type: "text/csv" });
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(blob);
+      a.download = "daughtridge-inquiries.csv";
+      a.click();
+    } finally {
+      setExporting(false);
+    }
   }
 
   if (!ready) {
@@ -180,38 +257,36 @@ export function Admin() {
         <main className="admin-card-wrap">
           <div className="admin-card">
             <p className="admin-kicker">Daughtridge Investment Group LLC</p>
-            <h1>{mode === "signup" ? "Create Owner Account" : "Admin Login"}</h1>
+            <h1>Admin Login</h1>
+            <p className="admin-lead">
+              Owner access only. Sign in with the company email and password.
+            </p>
             <form className="admin-form" onSubmit={onAuth}>
               <label>
                 Email
-                <input name="email" type="email" defaultValue={OWNER_EMAIL} required />
+                <input
+                  name="email"
+                  type="email"
+                  autoComplete="username"
+                  defaultValue={OWNER_EMAIL}
+                  required
+                />
               </label>
               <label>
                 Password
-                <input name="password" type="password" minLength={8} required />
+                <input
+                  name="password"
+                  type="password"
+                  autoComplete="current-password"
+                  minLength={8}
+                  required
+                />
               </label>
-              {mode === "signup" ? (
-                <label>
-                  Confirm password
-                  <input name="confirm" type="password" minLength={8} required />
-                </label>
-              ) : null}
               {authError ? <p className="admin-error">{authError}</p> : null}
               <button className="admin-btn" type="submit" disabled={busy}>
-                {busy ? "Please wait…" : mode === "signup" ? "Create account" : "Sign in"}
+                {busy ? "Please wait…" : "Sign In"}
               </button>
             </form>
-            <p className="admin-switch">
-              {mode === "signup" ? (
-                <button type="button" onClick={() => setMode("signin")}>
-                  Sign in
-                </button>
-              ) : (
-                <button type="button" onClick={() => setMode("signup")}>
-                  Create account
-                </button>
-              )}
-            </p>
             <p className="admin-back">
               <a href="#/">Return to website</a>
             </p>
@@ -223,13 +298,36 @@ export function Admin() {
 
   return (
     <div className="admin-shell">
+      {pwPopup ? (
+        <div className="admin-popup-backdrop" role="alertdialog" aria-modal="true">
+          <div className="admin-popup">
+            <h2>Password updated</h2>
+            <p>Your password has been changed successfully.</p>
+            <button
+              type="button"
+              className="admin-btn"
+              onClick={() => setPwPopup(false)}
+            >
+              OK
+            </button>
+          </div>
+        </div>
+      ) : null}
       <header className="admin-header">
         <span>Owner</span>
         <div>
-          <button type="button" className="admin-btn-ghost" onClick={() => setPwOpen((v) => !v)}>
+          <button
+            type="button"
+            className="admin-btn-ghost"
+            onClick={() => setPwOpen((v) => !v)}
+          >
             Change password
           </button>
-          <button type="button" className="admin-btn-ghost" onClick={() => void signOut(auth)}>
+          <button
+            type="button"
+            className="admin-btn-ghost"
+            onClick={() => void signOut(auth)}
+          >
             Sign out
           </button>
         </div>
@@ -238,7 +336,11 @@ export function Admin() {
         <h1>Daughtridge Investment Group LLC</h1>
         <p className="admin-subtitle">Admin Dashboard</p>
         {pwOpen ? (
-          <form className="admin-form" onSubmit={onChangePassword} style={{ maxWidth: 420 }}>
+          <form
+            className="admin-form"
+            onSubmit={onChangePassword}
+            style={{ maxWidth: 420 }}
+          >
             <label>
               Current password
               <input name="current" type="password" required />
@@ -255,7 +357,7 @@ export function Admin() {
         ) : null}
         <div className="admin-stats">
           <span>
-            <strong>{rows.length}</strong> Total Submissions
+            <strong>{stats.total}</strong> Total Submissions
           </span>
           {STATUSES.map((s) => (
             <span key={s}>
@@ -263,23 +365,33 @@ export function Admin() {
             </span>
           ))}
         </div>
-        <div className="admin-filters">
-          <label>
-            Client / Reference
-            <select value={clientFilter} onChange={(e) => setClientFilter(e.target.value)}>
-              <option value="all">All clients</option>
-              {rows.map((r) => (
-                <option key={r.id} value={r.id}>
-                  {r.firstName} {r.lastName} — {r.referenceNumber}
-                </option>
-              ))}
-            </select>
-          </label>
+        <div className="admin-toolbar">
+          <form className="admin-search" onSubmit={onSearch}>
+            <label>
+              Client / Reference
+              <input
+                type="search"
+                value={searchInput}
+                onChange={(e) => setSearchInput(e.target.value)}
+                placeholder="First name, last name, or DIG-…"
+              />
+            </label>
+            <button type="submit" className="admin-btn">
+              Search
+            </button>
+            {searchActive ? (
+              <button type="button" className="admin-btn-ghost" onClick={clearSearch}>
+                Clear
+              </button>
+            ) : null}
+          </form>
           <label>
             Status
             <select
               value={statusFilter}
-              onChange={(e) => setStatusFilter(e.target.value as "all" | SubmissionStatus)}
+              onChange={(e) =>
+                setStatusFilter(e.target.value as "all" | SubmissionStatus)
+              }
             >
               <option value="all">All statuses</option>
               {STATUSES.map((s) => (
@@ -287,8 +399,13 @@ export function Admin() {
               ))}
             </select>
           </label>
-          <button type="button" className="admin-btn" onClick={exportCsv}>
-            Export to Excel/CSV
+          <button
+            type="button"
+            className="admin-btn"
+            onClick={() => void exportCsv()}
+            disabled={exporting}
+          >
+            {exporting ? "Exporting…" : "Export to Excel/CSV"}
           </button>
         </div>
         <div style={{ overflow: "auto" }}>
@@ -299,15 +416,20 @@ export function Admin() {
                 <th>Property</th>
                 <th>Type</th>
                 <th>Status</th>
+                <th>Action</th>
               </tr>
             </thead>
             <tbody>
-              {filtered.length === 0 ? (
+              {rows.length === 0 ? (
                 <tr>
-                  <td colSpan={4}>No submissions yet.</td>
+                  <td colSpan={5}>
+                    {searchActive
+                      ? "No clients match that search."
+                      : "No submissions yet."}
+                  </td>
                 </tr>
               ) : (
-                filtered.map((r) => (
+                rows.map((r) => (
                   <tr key={r.id}>
                     <td>
                       {r.firstName} {r.lastName}
@@ -321,10 +443,9 @@ export function Admin() {
                         className="admin-status-select"
                         value={r.status}
                         onChange={(e) => {
-                          const status = e.target.value as SubmissionStatus;
-                          void updateInquiryStatus(r.id, status);
-                          setRows((prev) =>
-                            prev.map((row) => (row.id === r.id ? { ...row, status } : row)),
+                          void onStatusChange(
+                            r.id,
+                            e.target.value as SubmissionStatus,
                           );
                         }}
                       >
@@ -333,12 +454,64 @@ export function Admin() {
                         ))}
                       </select>
                     </td>
+                    <td>
+                      <button
+                        type="button"
+                        className="admin-delete"
+                        onClick={() => void onDelete(r)}
+                      >
+                        DELETE
+                      </button>
+                    </td>
                   </tr>
                 ))
               )}
             </tbody>
           </table>
         </div>
+        {!searchActive ? (
+          <p className="admin-pager">
+            Page {page} · {PAGE_SIZE} per page · {total} total
+            <br />
+            <button
+              type="button"
+              className="admin-btn"
+              disabled={page <= 1}
+              onClick={() => {
+                setPage(1);
+                void listInquiriesPage(undefined, statusFilter).then((r) => {
+                  setRows(r.rows);
+                  setTotal(r.total);
+                  setCursors(r.last ? [r.last] : []);
+                });
+              }}
+            >
+              First
+            </button>{" "}
+            <button
+              type="button"
+              className="admin-btn"
+              disabled={!cursors[page - 1] || rows.length < PAGE_SIZE}
+              onClick={() => {
+                const cursor = cursors[page - 1];
+                if (!cursor) return;
+                void listInquiriesPage(cursor, statusFilter).then((r) => {
+                  setRows(r.rows);
+                  setTotal(r.total);
+                  setPage((p) => p + 1);
+                  setCursors((prev) => (r.last ? [...prev, r.last] : prev));
+                });
+              }}
+            >
+              Next
+            </button>
+          </p>
+        ) : (
+          <p className="admin-pager">
+            Showing up to {PAGE_SIZE} matches. Search uses name/reference prefix
+            plus the selected status.
+          </p>
+        )}
       </main>
     </div>
   );
