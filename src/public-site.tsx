@@ -226,7 +226,7 @@ export function PublicSite({ initialPage = "home" }: Props) {
           <div className="building-inner">
             <div>
               <img
-                src="/construction.jpg"
+                src="/construction.jpg?v=2"
                 alt="Home under construction"
                 loading="eager"
                 decoding="async"
