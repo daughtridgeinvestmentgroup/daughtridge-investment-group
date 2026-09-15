@@ -1,5 +1,5 @@
 import { useRef, useState, type FormEvent } from "react";
-import { FooterLogo, HeaderLogo, HeroLogo } from "./logo";
+import { FooterLogo, HeaderLogo } from "./logo";
 import { LegalDocs, PolicyLink } from "./legal-modals";
 import { submitInquiry, PROPERTY_TYPES } from "./inquiries";
 
@@ -21,29 +21,42 @@ export function PublicSite({ initialPage = "home" }: Props) {
   function go(next: SitePage) {
     setPage(next);
     setMenuOpen(false);
+
     const hash = `#page-${next}`;
+
     if (window.location.hash !== hash) {
       window.history.replaceState(null, "", hash);
     }
-    window.scrollTo({ top: 0, behavior: "auto" });
+
+    window.scrollTo({
+      top: 0,
+      behavior: "auto",
+    });
   }
 
   async function onSubmit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
+
     if (submittingRef.current) return;
+
     const form = e.currentTarget;
     const data = new FormData(form);
+
     setFormError(null);
 
     const terms = data.get("agree_terms") === "on";
 
     if (!terms) {
-      setFormError("Please agree to the Terms & Conditions and Privacy Policy.");
+      setFormError(
+        "Please agree to the Terms & Conditions and Privacy Policy.",
+      );
       return;
     }
 
     const typeChoice = String(data.get("property_type") ?? "").trim();
-    const typeOther = String(data.get("property_type_other") ?? "").trim();
+    const typeOther = String(
+      data.get("property_type_other") ?? "",
+    ).trim();
 
     if (typeChoice === "Other" && !typeOther) {
       setFormError("Please enter the property type.");
@@ -51,7 +64,9 @@ export function PublicSite({ initialPage = "home" }: Props) {
     }
 
     const propertyTypeValue =
-      typeChoice === "Other" ? `Other: ${typeOther}` : typeChoice;
+      typeChoice === "Other"
+        ? `Other: ${typeOther}`
+        : typeChoice;
 
     submittingRef.current = true;
     setSubmitting(true);
@@ -63,12 +78,16 @@ export function PublicSite({ initialPage = "home" }: Props) {
           lastName: String(data.get("last_name") ?? ""),
           email: String(data.get("email") ?? ""),
           phone: String(data.get("phone") ?? ""),
-          propertyAddress: String(data.get("property_address") ?? ""),
+          propertyAddress: String(
+            data.get("property_address") ?? "",
+          ),
           propertyType: propertyTypeValue,
           ownerName: String(data.get("owner_name") ?? ""),
           parcelPin: String(data.get("parcel_pin") ?? ""),
           acreage: String(data.get("acreages") ?? ""),
-          additionalNote: String(data.get("additional_note") ?? ""),
+          additionalNote: String(
+            data.get("additional_note") ?? "",
+          ),
           smsConsent: data.get("sms_consent") === "on",
           termsAccepted: true,
           privacyAccepted: true,
@@ -83,6 +102,7 @@ export function PublicSite({ initialPage = "home" }: Props) {
       setFormError(
         "We're sorry, but we were unable to submit your information at this time. Please try again.",
       );
+
       submittingRef.current = false;
       setSubmitting(false);
     }
@@ -90,8 +110,16 @@ export function PublicSite({ initialPage = "home" }: Props) {
 
   return (
     <div className="site">
+      {/* =========================
+          HEADER
+          ========================= */}
+
       <header className="header">
-        <button type="button" className="logo-link" onClick={() => go("home")}>
+        <button
+          type="button"
+          className="logo-link"
+          onClick={() => go("home")}
+        >
           <HeaderLogo />
         </button>
 
@@ -161,33 +189,38 @@ export function PublicSite({ initialPage = "home" }: Props) {
         </nav>
       </header>
 
+
+      {/* =========================
+          HOME
+          ========================= */}
+
       <div
         id="page-home"
-        className={`page-section${page === "home" ? " active" : ""}`}
+        className={`page-section${
+          page === "home" ? " active" : ""
+        }`}
       >
         <section className="hero">
-          <div className="hero-brand">
-            <div className="hero-logo">
-              <HeroLogo />
-            </div>
-          </div>
-
           <div className="hero-photo">
             <div className="hero-bg" />
             <div className="hero-overlay" />
 
             <div className="hero-content">
-              <div className="hero-name">
-                <h1 className="hero-title">DAUGHTRIDGE</h1>
-                <p className="hero-sub">Investment Group LLC</p>
-              </div>
-
-              <button className="btn" type="button" onClick={() => go("join")}>
+              <button
+                className="btn"
+                type="button"
+                onClick={() => go("join")}
+              >
                 Let's Start
               </button>
             </div>
           </div>
         </section>
+
+
+        {/* =========================
+            BUILDING STRONGER
+            ========================= */}
 
         <section className="building">
           <div className="building-inner">
@@ -208,10 +241,11 @@ export function PublicSite({ initialPage = "home" }: Props) {
               </h2>
 
               <p>
-                Located in Rocky Mount, NC, Daughtridge Investment Group LLC has
-                proudly served Edgecombe, Wilson, and Nash Counties for over a
-                decade. Since 2009, our mission has been simple yet powerful:
-                create affordable housing and restore homes back to livable
+                Located in Rocky Mount, NC, Daughtridge Investment
+                Group LLC has proudly served Edgecombe, Wilson, and
+                Nash Counties for over a decade. Since 2009, our
+                mission has been simple yet powerful: create
+                affordable housing and restore homes back to livable
                 conditions.
               </p>
 
@@ -221,7 +255,9 @@ export function PublicSite({ initialPage = "home" }: Props) {
                 onClick={() =>
                   document
                     .getElementById("learn-more-section")
-                    ?.scrollIntoView({ behavior: "smooth" })
+                    ?.scrollIntoView({
+                      behavior: "smooth",
+                    })
                 }
               >
                 Learn More
@@ -230,46 +266,70 @@ export function PublicSite({ initialPage = "home" }: Props) {
           </div>
         </section>
 
-        <section className="specializes" id="learn-more-section">
+
+        {/* =========================
+            SPECIALIZES
+            ========================= */}
+
+        <section
+          className="specializes"
+          id="learn-more-section"
+        >
           <p className="intro">
-            We believe every property has potential — whether it’s a house that
-            needs some love or a vacant piece of land waiting for its next
-            opportunity.
+            We believe every property has potential. If the house
+            that needs love or a vacant piece of land waiting for a
+            future.
           </p>
 
           <h3>Our company specializes in:</h3>
 
           <div className="cards">
             <div className="card">
-              <h4>Buying homes in need of renovation</h4>
+              <h4>
+                Buying homes in need of renovation
+              </h4>
+
               <p>
-                Buying homes in need of renovation and bringing them back to
-                life with care, quality, and craftsmanship.
+                Buying homes in need of renovation and bringing them
+                back to life with care, quality, and craftsmanship.
               </p>
             </div>
 
             <div className="card">
-              <h4>Restoring neighborhoods</h4>
+              <h4>
+                Restoring neighborhoods
+              </h4>
+
               <p>
-                Restoring neighborhoods by turning neglected properties into
-                safe, welcoming homes for families.
+                Restoring neighborhoods by turning neglected
+                properties into safe, welcoming homes for families.
               </p>
             </div>
 
             <div className="card">
-              <h4>Purchasing land and houses directly</h4>
+              <h4>
+                Purchasing land and houses directly
+              </h4>
+
               <p>
-                Purchasing land and houses directly, offering fair, transparent
-                solutions for property owners.
+                Purchasing land and houses directly, offering fair,
+                transparent solutions for property owners.
               </p>
             </div>
           </div>
         </section>
       </div>
 
+
+      {/* =========================
+          ABOUT
+          ========================= */}
+
       <div
         id="page-about"
-        className={`page-section${page === "about" ? " active" : ""}`}
+        className={`page-section${
+          page === "about" ? " active" : ""
+        }`}
       >
         <section className="about">
           <div className="about-inner">
@@ -278,21 +338,25 @@ export function PublicSite({ initialPage = "home" }: Props) {
                 <h2>Vision</h2>
 
                 <p>
-                  To be a leading force in community renewal and affordable
-                  housing, where every family has access to a safe, comfortable
-                  home and every property contributes to a stronger, more
-                  vibrant North Carolina.
+                  To be a leading force in community renewal and
+                  affordable housing, where every family has access
+                  to a safe, comfortable home and every property
+                  contributes to a stronger, more vibrant North
+                  Carolina.
                 </p>
 
-                <h2 style={{ marginTop: "2rem" }}>Mission</h2>
+                <h2 style={{ marginTop: "2rem" }}>
+                  Mission
+                </h2>
 
                 <p>
-                  To revitalize communities by buying and restoring homes that
-                  need care and transforming land into valuable opportunities.
-                  We are dedicated to creating affordable, quality housing while
-                  improving neighborhoods across Edgecombe, Wilson, and Nash
-                  Counties through integrity, craftsmanship, and community
-                  partnership.
+                  To revitalize communities by buying and restoring
+                  homes that need care and transforming land into
+                  valuable opportunities. We are dedicated to
+                  creating affordable, quality housing while
+                  improving neighborhoods across Edgecombe, Wilson,
+                  and Nash Counties through integrity,
+                  craftsmanship, and community partnership.
                 </p>
               </div>
 
@@ -316,7 +380,10 @@ export function PublicSite({ initialPage = "home" }: Props) {
                   alt="Living space"
                   loading="lazy"
                   decoding="async"
-                  style={{ gridColumn: "1 / -1", height: 210 }}
+                  style={{
+                    gridColumn: "1 / -1",
+                    height: 210,
+                  }}
                 />
               </div>
             </div>
@@ -326,30 +393,42 @@ export function PublicSite({ initialPage = "home" }: Props) {
 
               <div className="why-grid">
                 <div className="why-box">
-                  <h4>Experience you can trust</h4>
+                  <h4>
+                    Experience you can trust
+                  </h4>
+
                   <p>
-                    Over 15 years of proven work in housing and community
-                    restoration.
+                    Over 15 years of proven work in housing and
+                    community restoration.
                   </p>
                 </div>
 
                 <div className="why-box">
                   <h4>Local focus</h4>
-                  <p>Deep roots in Rocky Mount and surrounding counties.</p>
+
+                  <p>
+                    Deep roots in Rocky Mount and surrounding
+                    counties.
+                  </p>
                 </div>
 
                 <div className="why-box">
-                  <h4>Affordable housing solutions</h4>
+                  <h4>
+                    Affordable housing solutions
+                  </h4>
+
                   <p>
-                    Dedicated to creating homes that families can truly afford.
+                    Dedicated to creating homes that families can
+                    truly afford.
                   </p>
                 </div>
 
                 <div className="why-box">
                   <h4>Community impact</h4>
+
                   <p>
-                    Every renovation and build strengthens the neighborhoods we
-                    serve.
+                    Every renovation and build strengthens the
+                    neighborhoods we serve.
                   </p>
                 </div>
               </div>
@@ -366,9 +445,16 @@ export function PublicSite({ initialPage = "home" }: Props) {
         </section>
       </div>
 
+
+      {/* =========================
+          JOIN
+          ========================= */}
+
       <div
         id="page-join"
-        className={`page-section${page === "join" ? " active" : ""}`}
+        className={`page-section${
+          page === "join" ? " active" : ""
+        }`}
       >
         <section className="join">
           <div className="join-inner">
@@ -377,13 +463,14 @@ export function PublicSite({ initialPage = "home" }: Props) {
                 <h2>Thank You!</h2>
 
                 <p>
-                  Your information has been successfully submitted to
-                  Daughtridge Investment Group LLC.
+                  Your information has been successfully submitted
+                  to Daughtridge Investment Group LLC.
                 </p>
 
                 <p>
-                  We appreciate your interest. A member of our team will review
-                  your information and contact you regarding your inquiry.
+                  We appreciate your interest. A member of our team
+                  will review your information and contact you
+                  regarding your inquiry.
                 </p>
 
                 <button
@@ -405,17 +492,21 @@ export function PublicSite({ initialPage = "home" }: Props) {
                 <h2>Let's Build Together</h2>
 
                 <p className="lead">
-                  Looking to sell your land or house? At Daughtridge Investment
-                  Group LLC, we make the process simple, fair, and
-                  stress-free.
+                  Looking to sell your land or house? At
+                  Daughtridge Investment Group LLC, we make the
+                  process simple, fair, and stress-free.
                   <br />
                   <br />
-                  When you click “SUBMIT FORM,” you're taking the first step
-                  toward a smooth transaction with a trusted local team that
-                  values integrity and community.
+                  When you click “Get My Offer,” you're taking the
+                  first step toward a smooth transaction with a
+                  trusted local team that values integrity and
+                  community.
                 </p>
 
-                <form onSubmit={onSubmit} noValidate={false}>
+                <form
+                  onSubmit={onSubmit}
+                  noValidate={false}
+                >
                   <input
                     type="text"
                     name="website"
@@ -431,7 +522,10 @@ export function PublicSite({ initialPage = "home" }: Props) {
 
                   <div className="form-row">
                     <div className="form-group">
-                      <label htmlFor="first">First *</label>
+                      <label htmlFor="first">
+                        First *
+                      </label>
+
                       <input
                         type="text"
                         id="first"
@@ -441,7 +535,10 @@ export function PublicSite({ initialPage = "home" }: Props) {
                     </div>
 
                     <div className="form-group">
-                      <label htmlFor="last">Last *</label>
+                      <label htmlFor="last">
+                        Last *
+                      </label>
+
                       <input
                         type="text"
                         id="last"
@@ -453,7 +550,10 @@ export function PublicSite({ initialPage = "home" }: Props) {
 
                   <div className="form-row">
                     <div className="form-group">
-                      <label htmlFor="email">Email *</label>
+                      <label htmlFor="email">
+                        Email *
+                      </label>
+
                       <input
                         type="email"
                         id="email"
@@ -463,7 +563,10 @@ export function PublicSite({ initialPage = "home" }: Props) {
                     </div>
 
                     <div className="form-group">
-                      <label htmlFor="phone">Phone *</label>
+                      <label htmlFor="phone">
+                        Phone *
+                      </label>
+
                       <input
                         type="tel"
                         id="phone"
@@ -474,7 +577,10 @@ export function PublicSite({ initialPage = "home" }: Props) {
                   </div>
 
                   <div className="form-group">
-                    <label htmlFor="address">Property Address</label>
+                    <label htmlFor="address">
+                      Property Address
+                    </label>
+
                     <input
                       type="text"
                       id="address"
@@ -484,19 +590,27 @@ export function PublicSite({ initialPage = "home" }: Props) {
 
                   <div
                     className={`form-row property-type-row${
-                      propertyType === "Other" ? " show-other" : ""
+                      propertyType === "Other"
+                        ? " show-other"
+                        : ""
                     }`}
                   >
                     <div className="form-group">
-                      <label htmlFor="property-type">Property Type</label>
+                      <label htmlFor="property-type">
+                        Property Type
+                      </label>
 
                       <select
                         id="property-type"
                         name="property_type"
                         defaultValue=""
-                        onChange={(e) => setPropertyType(e.target.value)}
+                        onChange={(e) =>
+                          setPropertyType(e.target.value)
+                        }
                       >
-                        <option value="">Select property type</option>
+                        <option value="">
+                          Select property type
+                        </option>
 
                         {PROPERTY_TYPES.map((type) => (
                           <option key={type} value={type}>
@@ -521,25 +635,52 @@ export function PublicSite({ initialPage = "home" }: Props) {
                   </div>
 
                   <div className="form-group">
-                    <label htmlFor="owner">Owner’s Name</label>
-                    <input type="text" id="owner" name="owner_name" />
+                    <label htmlFor="owner">
+                      Owner’s Name
+                    </label>
+
+                    <input
+                      type="text"
+                      id="owner"
+                      name="owner_name"
+                    />
                   </div>
 
                   <div className="form-row">
                     <div className="form-group">
-                      <label htmlFor="parcel">Parcel / PIN</label>
-                      <input type="text" id="parcel" name="parcel_pin" />
+                      <label htmlFor="parcel">
+                        Parcel / PIN
+                      </label>
+
+                      <input
+                        type="text"
+                        id="parcel"
+                        name="parcel_pin"
+                      />
                     </div>
 
                     <div className="form-group">
-                      <label htmlFor="acreage">Acreage</label>
-                      <input type="text" id="acreage" name="acreages" />
+                      <label htmlFor="acreage">
+                        Acreage
+                      </label>
+
+                      <input
+                        type="text"
+                        id="acreage"
+                        name="acreages"
+                      />
                     </div>
                   </div>
 
                   <div className="form-group">
-                    <label htmlFor="notes">Additional Note</label>
-                    <textarea id="notes" name="additional_note" />
+                    <label htmlFor="notes">
+                      Additional Note
+                    </label>
+
+                    <textarea
+                      id="notes"
+                      name="additional_note"
+                    />
                   </div>
 
                   <div className="checks">
@@ -552,8 +693,8 @@ export function PublicSite({ initialPage = "home" }: Props) {
                       />
 
                       <div>
-                        By checking this box, you acknowledge that you have
-                        read, understood, and agree to the{" "}
+                        By checking this box, you acknowledge that
+                        you have read, understood, and agree to the{" "}
                         <PolicyLink kind="terms">
                           Terms & Conditions
                         </PolicyLink>{" "}
@@ -573,26 +714,30 @@ export function PublicSite({ initialPage = "home" }: Props) {
                       />
 
                       <label htmlFor="sms">
-                        By entering your phone number and checking the consent
-                        box, you agree to receive text messages from Daughtridge
-                        Investment Group LLC. Message frequency may vary.
-                        Standard message and data rates may apply.
+                        By entering your phone number and checking
+                        the consent box, you agree to receive text
+                        messages from Daughtridge Investment Group
+                        LLC. Message frequency may vary. Standard
+                        message and data rates may apply.
                         <br />
                         <br />
-                        You consent to be contacted regarding property
-                        opportunities, lot acquisitions, and manufactured home
-                        projects in North Carolina and Florida.
+                        You consent to be contacted regarding
+                        property opportunities, lot acquisitions,
+                        and manufactured home projects in North
+                        Carolina and Florida.
                         <br />
                         <br />
-                        Your information will be handled with care, and you may
-                        opt out at any time. Reply STOP to opt out at any time.
-                        Reply HELP for help.
+                        Your information will be handled with care,
+                        and you may opt out at any time. Reply STOP
+                        to opt out at any time. Reply HELP for help.
                       </label>
                     </div>
                   </div>
 
                   {formError ? (
-                    <p className="form-error">{formError}</p>
+                    <p className="form-error">
+                      {formError}
+                    </p>
                   ) : null}
 
                   <div className="submit-wrap">
@@ -601,7 +746,9 @@ export function PublicSite({ initialPage = "home" }: Props) {
                       className="submit-btn"
                       disabled={submitting}
                     >
-                      {submitting ? "SUBMITTING..." : "Submit Form"}
+                      {submitting
+                        ? "SUBMITTING..."
+                        : "Submit Form"}
                     </button>
                   </div>
                 </form>
@@ -611,18 +758,32 @@ export function PublicSite({ initialPage = "home" }: Props) {
         </section>
       </div>
 
+
+      {/* =========================
+          CONTACT
+          ========================= */}
+
       <div
         id="page-contact"
-        className={`page-section${page === "contact" ? " active" : ""}`}
+        className={`page-section${
+          page === "contact" ? " active" : ""
+        }`}
       >
-        <section className="about" style={{ paddingBottom: "2rem" }}>
+        <section
+          className="about"
+          style={{ paddingBottom: "2rem" }}
+        >
           <div
             className="about-inner"
-            style={{ textAlign: "center", maxWidth: 600 }}
+            style={{
+              textAlign: "center",
+              maxWidth: 600,
+            }}
           >
             <h2
               style={{
-                fontFamily: "'Playfair Display', serif",
+                fontFamily:
+                  "'Playfair Display', serif",
                 color: "var(--brown)",
                 fontSize: "2.1rem",
                 marginBottom: "1rem",
@@ -637,11 +798,16 @@ export function PublicSite({ initialPage = "home" }: Props) {
                 marginBottom: "1.5rem",
               }}
             >
-              Reach out to us anytime. We are happy to discuss how we can help
-              with your property.
+              Reach out to us anytime. We are happy to discuss
+              how we can help with your property.
             </p>
 
-            <p style={{ fontSize: "1.05rem", lineHeight: 1.9 }}>
+            <p
+              style={{
+                fontSize: "1.05rem",
+                lineHeight: 1.9,
+              }}
+            >
               <strong>Rocky Mount, NC</strong>
               <br />
               Tel: (252) 320-3440
@@ -673,6 +839,11 @@ export function PublicSite({ initialPage = "home" }: Props) {
           </div>
         </section>
       </div>
+
+
+      {/* =========================
+          FOOTER
+          ========================= */}
 
       <footer className="footer">
         <div className="footer-inner">
@@ -715,7 +886,10 @@ export function PublicSite({ initialPage = "home" }: Props) {
               target="_blank"
               rel="noopener noreferrer"
             >
-              <svg viewBox="0 0 24 24" aria-hidden="true">
+              <svg
+                viewBox="0 0 24 24"
+                aria-hidden="true"
+              >
                 <path
                   fill="#1877F2"
                   d="M24 12.073C24 5.405 18.627 0 12 0S0 5.405 0 12.073C0 18.1 4.388 23.094 10.125 24v-8.437H7.078v-3.49h3.047v-2.66c0-3.025 1.792-4.697 4.533-4.697 1.312 0 2.686.236 2.686.236v2.97h-1.514c-1.491 0-1.956.93-1.956 1.887v2.264h3.328l-.532 3.49h-2.796V24C19.612 23.094 24 18.1 24 12.073z"
@@ -731,7 +905,10 @@ export function PublicSite({ initialPage = "home" }: Props) {
               target="_blank"
               rel="noopener noreferrer"
             >
-              <svg viewBox="0 0 24 24" aria-hidden="true">
+              <svg
+                viewBox="0 0 24 24"
+                aria-hidden="true"
+              >
                 <defs>
                   <linearGradient
                     id="ig-grad"
@@ -740,9 +917,18 @@ export function PublicSite({ initialPage = "home" }: Props) {
                     x2="100%"
                     y2="0%"
                   >
-                    <stop offset="0%" stopColor="#f58529" />
-                    <stop offset="45%" stopColor="#dd2a7b" />
-                    <stop offset="100%" stopColor="#515bd4" />
+                    <stop
+                      offset="0%"
+                      stopColor="#f58529"
+                    />
+                    <stop
+                      offset="45%"
+                      stopColor="#dd2a7b"
+                    />
+                    <stop
+                      offset="100%"
+                      stopColor="#515bd4"
+                    />
                   </linearGradient>
                 </defs>
 
@@ -777,15 +963,23 @@ export function PublicSite({ initialPage = "home" }: Props) {
           </div>
 
           <div className="footer-policies">
-            <PolicyLink kind="terms">Terms & Conditions</PolicyLink>
-            <PolicyLink kind="privacy">Privacy Policy</PolicyLink>
+            <PolicyLink kind="terms">
+              Terms & Conditions
+            </PolicyLink>
+
+            <PolicyLink kind="privacy">
+              Privacy Policy
+            </PolicyLink>
           </div>
 
           <div className="footer-bottom">
             Copyright © 2026 All rights reserved.
 
             <div>
-              <a href="#/admin" className="owner-login">
+              <a
+                href="#/admin"
+                className="owner-login"
+              >
                 Owner login
               </a>
             </div>
