@@ -177,7 +177,7 @@
 
   inset: 0;
 
-  background-image: url("/house.jpg");
+  background-image: url("/house.jpg?v=2");
 
   background-position: center center;
 
