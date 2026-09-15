@@ -189,7 +189,6 @@ export function PublicSite({ initialPage = "home" }: Props) {
         </nav>
       </header>
 
-
       {/* =========================
           HOME
           ========================= */}
@@ -216,7 +215,6 @@ export function PublicSite({ initialPage = "home" }: Props) {
             </div>
           </div>
         </section>
-
 
         {/* =========================
             BUILDING STRONGER
@@ -265,7 +263,6 @@ export function PublicSite({ initialPage = "home" }: Props) {
             </div>
           </div>
         </section>
-
 
         {/* =========================
             SPECIALIZES
@@ -320,7 +317,6 @@ export function PublicSite({ initialPage = "home" }: Props) {
         </section>
       </div>
 
-
       {/* =========================
           ABOUT
           ========================= */}
@@ -362,14 +358,14 @@ export function PublicSite({ initialPage = "home" }: Props) {
 
               <div className="vm-images">
                 <img
-                  src="/interior1.jpg?v=2"
+                  src="/interior1.jpg"
                   alt="Interior"
                   loading="lazy"
                   decoding="async"
                 />
 
                 <img
-                  src="/interior2.jpg?v=2"
+                  src="/interior2.jpg"
                   alt="Home interior"
                   loading="lazy"
                   decoding="async"
@@ -444,7 +440,6 @@ export function PublicSite({ initialPage = "home" }: Props) {
           </div>
         </section>
       </div>
-
 
       {/* =========================
           JOIN
@@ -758,7 +753,6 @@ export function PublicSite({ initialPage = "home" }: Props) {
         </section>
       </div>
 
-
       {/* =========================
           CONTACT
           ========================= */}
@@ -839,7 +833,6 @@ export function PublicSite({ initialPage = "home" }: Props) {
           </div>
         </section>
       </div>
-
 
       {/* =========================
           FOOTER
@@ -974,15 +967,6 @@ export function PublicSite({ initialPage = "home" }: Props) {
 
           <div className="footer-bottom">
             Copyright © 2026 All rights reserved.
-
-            <div>
-              <a
-                href="#/admin"
-                className="owner-login"
-              >
-                Owner login
-              </a>
-            </div>
           </div>
         </div>
       </footer>
