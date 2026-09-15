@@ -362,14 +362,14 @@ export function PublicSite({ initialPage = "home" }: Props) {
 
               <div className="vm-images">
                 <img
-                  src="/interior1.jpg"
+                  src="/interior1.jpg?v=2"
                   alt="Interior"
                   loading="lazy"
                   decoding="async"
                 />
 
                 <img
-                  src="/interior2.jpg"
+                  src="/interior2.jpg?v=2"
                   alt="Home interior"
                   loading="lazy"
                   decoding="async"
