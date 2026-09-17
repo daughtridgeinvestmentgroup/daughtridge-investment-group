@@ -1,3 +1,4 @@
+import emailjs from "@emailjs/browser";
 import {
   addDoc,
   collection,
@@ -16,6 +17,11 @@ import {
   type DocumentData,
 } from "firebase/firestore";
 import { db } from "./firebase";
+
+const EMAILJS_PUBLIC_KEY = "W75quHyvj2dmS3fJf";
+const EMAILJS_SERVICE_ID = "service_h6p6cj";
+const VISITOR_TEMPLATE_ID = "template_rfrtxl9";
+const OWNER_TEMPLATE_ID = "template_ttp3d8n";
 
 export const PROPERTY_TYPES = [
   "Single-Family Home",
@@ -80,6 +86,97 @@ function todayStamp() {
 }
 
 /**
+ * Small delay used between EmailJS requests.
+ * EmailJS limits browser requests to approximately one request per second.
+ */
+function wait(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * Send the visitor confirmation and owner notification emails.
+ *
+ * Email errors are intentionally caught so that a temporary email
+ * problem does not make the visitor submit the form a second time.
+ */
+async function sendEmailNotifications({
+  firstName,
+  lastName,
+  email,
+  phone,
+  referenceNumber,
+}: {
+  firstName: string;
+  lastName: string;
+  email: string;
+  phone: string;
+  referenceNumber: string;
+}) {
+  const dateTime = new Date().toLocaleString("en-US", {
+    timeZone: "America/New_York",
+    dateStyle: "long",
+    timeStyle: "short",
+  });
+
+  const templateParams = {
+    first_name: firstName,
+    last_name: lastName,
+    email,
+    phone,
+    reference_number: referenceNumber,
+    date_time: dateTime,
+  };
+
+  /*
+   * 1. Send confirmation email to the visitor.
+   */
+  try {
+    await emailjs.send(
+      EMAILJS_SERVICE_ID,
+      VISITOR_TEMPLATE_ID,
+      templateParams,
+      {
+        publicKey: EMAILJS_PUBLIC_KEY,
+      },
+    );
+
+    console.log("Visitor confirmation email sent.");
+  } catch (error) {
+    console.error(
+      "Visitor confirmation email failed:",
+      error,
+    );
+  }
+
+  /*
+   * EmailJS has a request-rate limit, so wait before
+   * sending the second email.
+   */
+  await wait(1100);
+
+  /*
+   * 2. Send notification email to the owner.
+   */
+  try {
+    await emailjs.send(
+      EMAILJS_SERVICE_ID,
+      OWNER_TEMPLATE_ID,
+      templateParams,
+      {
+        publicKey: EMAILJS_PUBLIC_KEY,
+      },
+    );
+
+    console.log("Owner notification email sent.");
+  } catch (error) {
+    console.error(
+      "Owner notification email failed:",
+      error,
+    );
+  }
+}
+
+/**
  * Submit a new inquiry from the public website.
  */
 export async function submitInquiry({
@@ -109,44 +206,99 @@ export async function submitInquiry({
 
   const stamp = todayStamp();
 
-  const existing = await getDocs(collection(db, "inquiries"));
+  /*
+   * Keep the existing reference-number system.
+   */
+  const existing = await getDocs(
+    collection(db, "inquiries"),
+  );
 
-  const n = String(existing.size + 1).padStart(3, "0");
+  const n = String(
+    existing.size + 1,
+  ).padStart(3, "0");
 
-  const referenceNumber = `DIG-${stamp}-${n}`;
+  const referenceNumber =
+    `DIG-${stamp}-${n}`;
 
-  await addDoc(collection(db, "inquiries"), {
+  const firstName =
+    data.firstName.trim();
+
+  const lastName =
+    data.lastName.trim();
+
+  const email =
+    data.email.trim().toLowerCase();
+
+  const phone =
+    data.phone.trim();
+
+  /*
+   * First save the inquiry to Firestore.
+   *
+   * This happens BEFORE sending email so the inquiry
+   * is safely stored even if EmailJS has a temporary problem.
+   */
+  await addDoc(
+    collection(db, "inquiries"),
+    {
+      referenceNumber,
+
+      firstName,
+
+      lastName,
+
+      email,
+
+      phone,
+
+      propertyAddress:
+        data.propertyAddress.trim(),
+
+      propertyType:
+        data.propertyType.trim(),
+
+      ownerName:
+        data.ownerName.trim(),
+
+      parcelPin:
+        data.parcelPin.trim(),
+
+      acreage:
+        data.acreage.trim(),
+
+      additionalNote:
+        data.additionalNote.trim(),
+
+      smsConsent:
+        data.smsConsent,
+
+      termsAccepted:
+        data.termsAccepted,
+
+      privacyAccepted:
+        data.privacyAccepted,
+
+      status: "New",
+
+      submittedAt:
+        serverTimestamp(),
+    },
+  );
+
+  /*
+   * Only after Firestore successfully saves the inquiry,
+   * send the two EmailJS notifications.
+   *
+   * Email failures do NOT cause submitInquiry to fail.
+   * This prevents visitors from accidentally creating
+   * duplicate inquiries by submitting the form again.
+   */
+  await sendEmailNotifications({
+    firstName,
+    lastName,
+    email,
+    phone,
     referenceNumber,
-
-    firstName: data.firstName.trim(),
-
-    lastName: data.lastName.trim(),
-
-    email: data.email.trim().toLowerCase(),
-
-    phone: data.phone.trim(),
-
-    propertyAddress: data.propertyAddress.trim(),
-
-    propertyType: data.propertyType.trim(),
-
-    ownerName: data.ownerName.trim(),
-
-    parcelPin: data.parcelPin.trim(),
-
-    acreage: data.acreage.trim(),
-
-    additionalNote: data.additionalNote.trim(),
-
-    smsConsent: data.smsConsent,
-
-    termsAccepted: data.termsAccepted,
-
-    privacyAccepted: data.privacyAccepted,
-
-    status: "New",
-
-    submittedAt: serverTimestamp(),
   });
 
   return {
@@ -155,7 +307,8 @@ export async function submitInquiry({
 }
 
 /**
- * Convert a Firestore document into the format used by the Admin Dashboard.
+ * Convert a Firestore document into the format
+ * used by the Admin Dashboard.
  */
 function mapDoc(
   d: QueryDocumentSnapshot<DocumentData>,
@@ -163,74 +316,86 @@ function mapDoc(
   const x = d.data();
 
   const submitted =
-    x.submittedAt?.toDate?.() ?? new Date();
+    x.submittedAt?.toDate?.() ??
+    new Date();
 
   return {
     id: d.id,
 
-    referenceNumber: String(
-      x.referenceNumber ?? "",
-    ),
+    referenceNumber:
+      String(
+        x.referenceNumber ?? "",
+      ),
 
-    firstName: String(
-      x.firstName ?? "",
-    ),
+    firstName:
+      String(
+        x.firstName ?? "",
+      ),
 
-    lastName: String(
-      x.lastName ?? "",
-    ),
+    lastName:
+      String(
+        x.lastName ?? "",
+      ),
 
-    email: String(
-      x.email ?? "",
-    ),
+    email:
+      String(
+        x.email ?? "",
+      ),
 
-    phone: String(
-      x.phone ?? "",
-    ),
+    phone:
+      String(
+        x.phone ?? "",
+      ),
 
-    propertyAddress: String(
-      x.propertyAddress ?? "",
-    ),
+    propertyAddress:
+      String(
+        x.propertyAddress ?? "",
+      ),
 
-    propertyType: String(
-      x.propertyType ?? "",
-    ),
+    propertyType:
+      String(
+        x.propertyType ?? "",
+      ),
 
-    ownerName: String(
-      x.ownerName ?? "",
-    ),
+    ownerName:
+      String(
+        x.ownerName ?? "",
+      ),
 
-    parcelPin: String(
-      x.parcelPin ?? "",
-    ),
+    parcelPin:
+      String(
+        x.parcelPin ?? "",
+      ),
 
-    acreage: String(
-      x.acreage ?? "",
-    ),
+    acreage:
+      String(
+        x.acreage ?? "",
+      ),
 
-    additionalNote: String(
-      x.additionalNote ?? "",
-    ),
+    additionalNote:
+      String(
+        x.additionalNote ?? "",
+      ),
 
-    smsConsent: Boolean(
-      x.smsConsent,
-    ),
+    smsConsent:
+      Boolean(x.smsConsent),
 
-    termsAccepted: Boolean(
-      x.termsAccepted,
-    ),
+    termsAccepted:
+      Boolean(x.termsAccepted),
 
-    privacyAccepted: Boolean(
-      x.privacyAccepted,
-    ),
+    privacyAccepted:
+      Boolean(x.privacyAccepted),
 
     status: (
       STATUSES as readonly string[]
     ).includes(x.status)
-      ? (x.status as SubmissionStatus)
+      ? (
+          x.status as SubmissionStatus
+        )
       : "New",
 
-    submittedAt: submitted.toISOString(),
+    submittedAt:
+      submitted.toISOString(),
   };
 }
 
@@ -239,9 +404,15 @@ function mapDoc(
  */
 export async function listInquiriesPage(
   cursor?: QueryDocumentSnapshot<DocumentData>,
-  status: "all" | SubmissionStatus = "all",
+  status:
+    | "all"
+    | SubmissionStatus = "all",
 ) {
-  const col = collection(db, "inquiries");
+  const col =
+    collection(
+      db,
+      "inquiries",
+    );
 
   const filters =
     status === "all"
@@ -277,7 +448,8 @@ export async function listInquiriesPage(
         ...filters,
       );
 
-  const snap = await getDocs(q);
+  const snap =
+    await getDocs(q);
 
   const countSnap =
     await getCountFromServer(
@@ -294,7 +466,8 @@ export async function listInquiriesPage(
     );
 
   return {
-    rows: snap.docs.map(mapDoc),
+    rows:
+      snap.docs.map(mapDoc),
 
     last:
       snap.docs[
@@ -324,10 +497,11 @@ export async function listInquiries(): Promise<
 export async function getInquiryStats(): Promise<
   InquiryStats
 > {
-  const col = collection(
-    db,
-    "inquiries",
-  );
+  const col =
+    collection(
+      db,
+      "inquiries",
+    );
 
   const totalSnap =
     await getCountFromServer(
@@ -416,28 +590,27 @@ export async function getInquiryStats(): Promise<
 }
 
 /**
- * Search inquiries by:
- * - Reference Number
- * - First Name
- * - Last Name
- *
- * This uses Firestore prefix queries rather than downloading
- * the entire collection.
+ * Search inquiries by reference number,
+ * first name, or last name.
  */
 export async function searchInquiries(
   term: string,
-  status: "all" | SubmissionStatus = "all",
+  status:
+    | "all"
+    | SubmissionStatus = "all",
 ): Promise<SubmissionRow[]> {
-  const raw = term.trim();
+  const raw =
+    term.trim();
 
   if (!raw) {
     return [];
   }
 
-  const col = collection(
-    db,
-    "inquiries",
-  );
+  const col =
+    collection(
+      db,
+      "inquiries",
+    );
 
   const lower =
     raw.toLowerCase();
@@ -452,7 +625,9 @@ export async function searchInquiries(
     `${upper}\uf8ff`;
 
   const queries = [
-    // Reference number search.
+    /*
+     * Reference number search.
+     */
     getDocs(
       query(
         col,
@@ -470,25 +645,9 @@ export async function searchInquiries(
       ),
     ),
 
-    // Last name search.
-    getDocs(
-      query(
-        col,
-        where(
-          "lastName",
-          ">=",
-          raw,
-        ),
-        where(
-          "lastName",
-          "<=",
-          `${raw}\uf8ff`,
-        ),
-        limit(PAGE_SIZE),
-      ),
-    ),
-
-    // First name search.
+    /*
+     * First name search.
+     */
     getDocs(
       query(
         col,
@@ -506,7 +665,30 @@ export async function searchInquiries(
       ),
     ),
 
-    // Lowercase first-name field for newer records.
+    /*
+     * Last name search.
+     */
+    getDocs(
+      query(
+        col,
+        where(
+          "lastName",
+          ">=",
+          raw,
+        ),
+        where(
+          "lastName",
+          "<=",
+          `${raw}\uf8ff`,
+        ),
+        limit(PAGE_SIZE),
+      ),
+    ),
+
+    /*
+     * Lowercase first-name search for records
+     * that contain firstNameLower.
+     */
     getDocs(
       query(
         col,
@@ -524,7 +706,10 @@ export async function searchInquiries(
       ),
     ),
 
-    // Lowercase last-name field for newer records.
+    /*
+     * Lowercase last-name search for records
+     * that contain lastNameLower.
+     */
     getDocs(
       query(
         col,
@@ -587,18 +772,20 @@ export async function searchInquiries(
 export async function exportAllInquiries(): Promise<
   SubmissionRow[]
 > {
-  const col = collection(
-    db,
-    "inquiries",
-  );
+  const col =
+    collection(
+      db,
+      "inquiries",
+    );
 
-  const q = query(
-    col,
-    orderBy(
-      "submittedAt",
-      "desc",
-    ),
-  );
+  const q =
+    query(
+      col,
+      orderBy(
+        "submittedAt",
+        "desc",
+      ),
+    );
 
   const snap =
     await getDocs(q);
