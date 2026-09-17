@@ -1,22 +1,27 @@
+import emailjs from "@emailjs/browser";
 import {
   addDoc,
   collection,
   deleteDoc,
-  doc,
   getCountFromServer,
   getDocs,
   limit,
   orderBy,
   query,
-  serverTimestamp,
   startAfter,
   updateDoc,
+  doc,
+  serverTimestamp,
   where,
-  type DocumentData,
-  type QueryConstraint,
   type QueryDocumentSnapshot,
+  type DocumentData,
 } from "firebase/firestore";
 import { db } from "./firebase";
+
+const EMAILJS_PUBLIC_KEY = "W75quHyvj2dmS3fJf";
+const EMAILJS_SERVICE_ID = "service_h6p6cj";
+const VISITOR_TEMPLATE_ID = "template_rfrtxl9";
+const OWNER_TEMPLATE_ID = "template_ttp3d8n";
 
 export const PROPERTY_TYPES = [
   "Single-Family Home",
@@ -62,25 +67,78 @@ export type SubmissionRow = {
   submittedAt: string;
 };
 
-export type InquiryStats = {
-  total: number;
-} & Record<SubmissionStatus, number>;
+function todayStamp() {
+  const d = new Date();
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
 
-function createReferenceNumber(): string {
-  const date = new Date();
+  return `${y}${m}${day}`;
+}
 
-  const datePart =
-    `${date.getFullYear()}` +
-    `${String(date.getMonth() + 1).padStart(2, "0")}` +
-    `${String(date.getDate()).padStart(2, "0")}`;
+function wait(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
 
-  const randomPart = crypto
-    .randomUUID()
-    .replace(/-/g, "")
-    .slice(0, 8)
-    .toUpperCase();
+async function sendEmailNotifications({
+  firstName,
+  lastName,
+  email,
+  phone,
+  referenceNumber,
+}: {
+  firstName: string;
+  lastName: string;
+  email: string;
+  phone: string;
+  referenceNumber: string;
+}) {
+  const dateTime = new Date().toLocaleString("en-US", {
+    timeZone: "America/New_York",
+    dateStyle: "long",
+    timeStyle: "short",
+  });
 
-  return `DIG-${datePart}-${randomPart}`;
+  const templateParams = {
+    first_name: firstName,
+    last_name: lastName,
+    email,
+    phone,
+    reference_number: referenceNumber,
+    date_time: dateTime,
+  };
+
+  // Send visitor confirmation email.
+  try {
+    await emailjs.send(
+      EMAILJS_SERVICE_ID,
+      VISITOR_TEMPLATE_ID,
+      templateParams,
+      {
+        publicKey: EMAILJS_PUBLIC_KEY,
+      },
+    );
+  } catch (error) {
+    console.error("Visitor confirmation email failed:", error);
+  }
+
+  // EmailJS limits requests to approximately one request per second.
+  // Wait before sending the second email.
+  await wait(1100);
+
+  // Send owner notification email.
+  try {
+    await emailjs.send(
+      EMAILJS_SERVICE_ID,
+      OWNER_TEMPLATE_ID,
+      templateParams,
+      {
+        publicKey: EMAILJS_PUBLIC_KEY,
+      },
+    );
+  } catch (error) {
+    console.error("Owner notification email failed:", error);
+  }
 }
 
 export async function submitInquiry({
@@ -103,51 +161,49 @@ export async function submitInquiry({
     honey?: string;
   };
 }) {
-  if (data.honey?.trim()) {
-    return {
-      ok: true as const,
-    };
-  }
+  if (data.honey) return { ok: true as const };
 
-  if (!data.termsAccepted || !data.privacyAccepted) {
-    throw new Error(
-      "You must accept the Terms & Conditions and Privacy Policy.",
-    );
-  }
+  const existing = await getDocs(collection(db, "inquiries"));
+  const n = String(existing.size + 1).padStart(3, "0");
 
-  const referenceNumber = createReferenceNumber();
+  const referenceNumber = `DIG-${todayStamp()}-${n}`;
+
+  const firstName = data.firstName.trim();
+  const lastName = data.lastName.trim();
+  const email = data.email.trim().toLowerCase();
+  const phone = data.phone.trim();
 
   await addDoc(collection(db, "inquiries"), {
     referenceNumber,
-
-    firstName: data.firstName.trim(),
-    lastName: data.lastName.trim(),
-
-    firstNameLower: data.firstName.trim().toLowerCase(),
-    lastNameLower: data.lastName.trim().toLowerCase(),
-
-    email: data.email.trim(),
-    phone: data.phone.trim(),
+    firstName,
+    lastName,
+    email,
+    phone,
     propertyAddress: data.propertyAddress.trim(),
     propertyType: data.propertyType.trim(),
     ownerName: data.ownerName.trim(),
     parcelPin: data.parcelPin.trim(),
     acreage: data.acreage.trim(),
     additionalNote: data.additionalNote.trim(),
-
-    smsConsent: Boolean(data.smsConsent),
-    termsAccepted: Boolean(data.termsAccepted),
-    privacyAccepted: Boolean(data.privacyAccepted),
-
+    smsConsent: data.smsConsent,
+    termsAccepted: data.termsAccepted,
+    privacyAccepted: data.privacyAccepted,
     status: "New",
-
     submittedAt: serverTimestamp(),
   });
 
-  return {
-    ok: true as const,
+  // Send emails only after the Firestore submission succeeds.
+  // Email failures will not make the visitor resubmit the form,
+  // which helps prevent duplicate inquiries.
+  await sendEmailNotifications({
+    firstName,
+    lastName,
+    email,
+    phone,
     referenceNumber,
-  };
+  });
+
+  return { ok: true as const };
 }
 
 function mapDoc(d: QueryDocumentSnapshot<DocumentData>): SubmissionRow {
@@ -177,67 +233,34 @@ function mapDoc(d: QueryDocumentSnapshot<DocumentData>): SubmissionRow {
   };
 }
 
-function dateConstraints(
-  dateFrom?: string,
-  dateTo?: string,
-): QueryConstraint[] {
-  const parts: QueryConstraint[] = [];
-
-  if (dateFrom) {
-    parts.push(
-      where(
-        "submittedAt",
-        ">=",
-        new Date(`${dateFrom}T00:00:00`),
-      ),
-    );
-  }
-
-  if (dateTo) {
-    const end = new Date(`${dateTo}T00:00:00`);
-    end.setDate(end.getDate() + 1);
-
-    parts.push(where("submittedAt", "<", end));
-  }
-
-  return parts;
-}
-
 export async function listInquiriesPage(
   cursor?: QueryDocumentSnapshot<DocumentData>,
   status: "all" | SubmissionStatus = "all",
-  dateFrom?: string,
-  dateTo?: string,
 ) {
   const col = collection(db, "inquiries");
 
-  const constraints: QueryConstraint[] = [];
+  const filters =
+    status === "all"
+      ? [orderBy("submittedAt", "desc"), limit(PAGE_SIZE)]
+      : [
+          where("status", "==", status),
+          orderBy("submittedAt", "desc"),
+          limit(PAGE_SIZE),
+        ];
 
-  if (status !== "all") {
-    constraints.push(where("status", "==", status));
-  }
+  const q = cursor
+    ? query(
+        col,
+        ...filters.slice(0, -1),
+        startAfter(cursor),
+        limit(PAGE_SIZE),
+      )
+    : query(col, ...filters);
 
-  constraints.push(...dateConstraints(dateFrom, dateTo));
-  constraints.push(orderBy("submittedAt", "desc"));
-
-  if (cursor) {
-    constraints.push(startAfter(cursor));
-  }
-
-  constraints.push(limit(PAGE_SIZE));
-
-  const snap = await getDocs(query(col, ...constraints));
-
-  const countConstraints: QueryConstraint[] = [];
-
-  if (status !== "all") {
-    countConstraints.push(where("status", "==", status));
-  }
-
-  countConstraints.push(...dateConstraints(dateFrom, dateTo));
+  const snap = await getDocs(q);
 
   const countSnap = await getCountFromServer(
-    query(col, ...countConstraints),
+    status === "all" ? query(col) : query(col, where("status", "==", status)),
   );
 
   return {
@@ -247,132 +270,8 @@ export async function listInquiriesPage(
   };
 }
 
-function prefixQuery(
-  field: "referenceNumber" | "firstNameLower" | "lastNameLower",
-  start: string,
-  end: string,
-  status: "all" | SubmissionStatus,
-) {
-  const col = collection(db, "inquiries");
-  const parts: QueryConstraint[] = [];
-
-  if (status !== "all") {
-    parts.push(where("status", "==", status));
-  }
-
-  parts.push(
-    where(field, ">=", start),
-    where(field, "<=", end),
-    limit(PAGE_SIZE),
-  );
-
-  return getDocs(query(col, ...parts));
-}
-
-export async function searchInquiries(
-  term: string,
-  status: "all" | SubmissionStatus = "all",
-): Promise<SubmissionRow[]> {
-  const raw = term.trim();
-
-  if (!raw) return [];
-
-  const lower = raw.toLowerCase();
-  const upper = raw.toUpperCase();
-
-  const lowerEnd = `${lower}\uf8ff`;
-  const upperEnd = `${upper}\uf8ff`;
-
-  const snaps = await Promise.all([
-    prefixQuery(
-      "referenceNumber",
-      upper,
-      upperEnd,
-      status,
-    ),
-    prefixQuery(
-      "lastNameLower",
-      lower,
-      lowerEnd,
-      status,
-    ),
-    prefixQuery(
-      "firstNameLower",
-      lower,
-      lowerEnd,
-      status,
-    ),
-  ]);
-
-  const byId = new Map<string, SubmissionRow>();
-
-  for (const snap of snaps) {
-    for (const d of snap.docs) {
-      byId.set(d.id, mapDoc(d));
-    }
-  }
-
-  return [...byId.values()].slice(0, PAGE_SIZE);
-}
-
-export async function getInquiryStats(): Promise<InquiryStats> {
-  const col = collection(db, "inquiries");
-
-  const [totalSnap, ...statusSnaps] = await Promise.all([
-    getCountFromServer(query(col)),
-
-    ...STATUSES.map((status) =>
-      getCountFromServer(
-        query(col, where("status", "==", status)),
-      ),
-    ),
-  ]);
-
-  const stats = {
-    total: totalSnap.data().count,
-    New: 0,
-    Qualified: 0,
-    "Not Qualified": 0,
-    "In Progress": 0,
-    Completed: 0,
-  } as InquiryStats;
-
-  STATUSES.forEach((status, i) => {
-    stats[status] = statusSnaps[i].data().count;
-  });
-
-  return stats;
-}
-
-export async function exportAllInquiries(): Promise<SubmissionRow[]> {
-  const col = collection(db, "inquiries");
-  const rows: SubmissionRow[] = [];
-
-  let cursor: QueryDocumentSnapshot<DocumentData> | undefined;
-
-  for (;;) {
-    const q = cursor
-      ? query(
-          col,
-          orderBy("submittedAt", "desc"),
-          startAfter(cursor),
-          limit(500),
-        )
-      : query(
-          col,
-          orderBy("submittedAt", "desc"),
-          limit(500),
-        );
-
-    const snap = await getDocs(q);
-
-    rows.push(...snap.docs.map(mapDoc));
-
-    if (snap.docs.length < 500) break;
-
-    cursor = snap.docs[snap.docs.length - 1];
-  }
-
+export async function listInquiries(): Promise<SubmissionRow[]> {
+  const { rows } = await listInquiriesPage();
   return rows;
 }
 
@@ -380,14 +279,9 @@ export async function updateInquiryStatus(
   id: string,
   status: SubmissionStatus,
 ) {
-  await updateDoc(
-    doc(db, "inquiries", id),
-    { status },
-  );
+  await updateDoc(doc(db, "inquiries", id), { status });
 }
 
 export async function deleteInquiry(id: string) {
-  await deleteDoc(
-    doc(db, "inquiries", id),
-  );
+  await deleteDoc(doc(db, "inquiries", id));
 }
