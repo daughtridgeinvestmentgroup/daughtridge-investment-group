@@ -25,7 +25,7 @@ import { db } from "./firebase";
  */
 
 const EMAILJS_PUBLIC_KEY = "W75quHyvj2dmS3fJf";
-const EMAILJS_SERVICE_ID = "service_h6p6cj";
+const EMAILJS_SERVICE_ID = "service_h6p6cjl";
 
 const VISITOR_TEMPLATE_ID = "template_rfrtxl9";
 const OWNER_TEMPLATE_ID = "template_ttp3d8n";
